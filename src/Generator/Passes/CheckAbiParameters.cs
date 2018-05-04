@@ -48,6 +48,7 @@ namespace CppSharp.Passes
                         Kind = ParameterKind.IndirectReturnType,
                         QualifiedType = function.ReturnType,
                         Name = "return",
+                        Namespace = function
                     };
 
                 function.Parameters.Insert(0, indirectParam);
@@ -66,14 +67,15 @@ namespace CppSharp.Passes
             }
 
             // Deleting destructors (default in v-table) accept an i32 bitfield as a
-            // second parameter.in MS ABI.
+            // second parameter in MS ABI.
             if (method != null && method.IsDestructor && Context.ParserOptions.IsMicrosoftAbi)
             {
                 method.Parameters.Add(new Parameter
                 {
                     Kind = ParameterKind.ImplicitDestructorParameter,
                     QualifiedType = new QualifiedType(new BuiltinType(PrimitiveType.Int)),
-                    Name = "delete"
+                    Name = "delete",
+                    Namespace = method
                 });
             }
 

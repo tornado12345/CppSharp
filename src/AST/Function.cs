@@ -27,7 +27,9 @@ namespace CppSharp.AST
         Regular,
         IndirectReturnType,
         OperatorParameter,
-        ImplicitDestructorParameter
+        ImplicitDestructorParameter,
+        Extension,
+        PropertyValue
     }
 
     public class Parameter : Declaration, ITypedDecl
@@ -48,10 +50,11 @@ namespace CppSharp.AST
             Kind = p.Kind;
             QualifiedType = p.QualifiedType;
             Usage = p.Usage;
+            OriginalDefaultArgument = p.OriginalDefaultArgument;
             DefaultArgument = p.DefaultArgument;
         }
 
-        public Type Type { get { return QualifiedType.Type; } }
+        public Type Type => QualifiedType.Type;
         public QualifiedType QualifiedType { get; set; }
         public bool IsIndirect { get; set; }
         public uint Index { get; set; }
@@ -60,16 +63,27 @@ namespace CppSharp.AST
         public ParameterUsage Usage { get; set; }
         public bool HasDefaultValue { get; set; }
 
-        public Expression DefaultArgument { get; set; }
-
-        public bool IsIn { get { return Usage == ParameterUsage.In; } }
-        public bool IsOut { get { return Usage == ParameterUsage.Out; } }
-        public bool IsInOut { get { return Usage == ParameterUsage.InOut; } }
-
-        public bool IsSynthetized
+        public Expression DefaultArgument
         {
-            get { return Kind != ParameterKind.Regular; }
+            get
+            {
+                return defaultArgument;
+            }
+            set
+            {
+                defaultArgument = value;
+                if (OriginalDefaultArgument == null)
+                    OriginalDefaultArgument = value;
+            }
         }
+
+        public Expression OriginalDefaultArgument { get; set; }
+
+        public bool IsIn => Usage == ParameterUsage.In;
+        public bool IsOut => Usage == ParameterUsage.Out;
+        public bool IsInOut => Usage == ParameterUsage.InOut;
+
+        public bool IsSynthetized => Kind != ParameterKind.Regular;
 
         public override T Visit<T>(IDeclVisitor<T> visitor)
         {
@@ -85,6 +99,8 @@ namespace CppSharp.AST
         {
             get { return DebugText.StartsWith("const ", System.StringComparison.Ordinal); }
         }
+
+        Expression defaultArgument;
     }
 
     public class ParameterTypeComparer : IEqualityComparer<Parameter>
@@ -113,39 +129,49 @@ namespace CppSharp.AST
         AbstractImplCall,
         DefaultValueOverload,
         InterfaceInstance,
-        AdjustedMethod
+        InterfaceDispose,
+        FieldAcessor
     }
 
-    public class Function : Declaration, ITypedDecl, IMangledDecl
+    public enum FriendKind
+    {
+        None,
+        Declared,
+        Undeclared
+    }
+
+    public class Function : DeclarationContext, ITypedDecl, IMangledDecl
     {
         public Function()
         {
-            Parameters = new List<Parameter>();
             CallingConvention = CallingConvention.Default;
-            IsVariadic = false;
-            IsInline = false;
             Signature = string.Empty;
-            Index = null;
         }
 
         public Function(Function function)
             : base(function)
         {
-            Parameters = new List<Parameter>();
             ReturnType = function.ReturnType;
             IsReturnIndirect = function.IsReturnIndirect;
             HasThisReturn = function.HasThisReturn;
             Parameters.AddRange(function.Parameters.Select(p => new Parameter(p)));
+            foreach (var parameter in Parameters)
+                parameter.Namespace = this;
+            InstantiatedFrom = function.InstantiatedFrom;
             IsVariadic = function.IsVariadic;
             IsInline = function.IsInline;
             IsPure = function.IsPure;
+            IsDeleted = function.IsDeleted;
+            IsDefaulted = function.IsDefaulted;
+            IsAmbiguous = function.IsAmbiguous;
+            FriendKind = function.FriendKind;
             OperatorKind = function.OperatorKind;
             CallingConvention = function.CallingConvention;
             SynthKind = function.SynthKind;
             OriginalFunction = function.OriginalFunction;
             Mangled = function.Mangled;
-            Index = function.Index;
             Signature = function.Signature;
+            FunctionType = function.FunctionType;
             if (function.SpecializationInfo != null)
             {
                 SpecializationInfo = new FunctionTemplateSpecialization(function.SpecializationInfo);
@@ -157,15 +183,17 @@ namespace CppSharp.AST
         public bool IsReturnIndirect { get; set; }
         public bool HasThisReturn { get; set; }
 
-        public List<Parameter> Parameters { get; set; }
+        public List<Parameter> Parameters { get; } = new List<Parameter>();
+        public bool IsConstExpr { get; set; }
         public bool IsVariadic { get; set; }
         public bool IsInline { get; set; }
         public bool IsPure { get; set; }
         public bool IsDeleted { get; set; }
+        public bool IsDefaulted { get; set; }
         public bool IsAmbiguous { get; set; }
-
+        public FriendKind FriendKind { get; set; }
         public CXXOperatorKind OperatorKind { get; set; }
-        public bool IsOperator { get { return OperatorKind != CXXOperatorKind.None; } }
+        public bool IsOperator => OperatorKind != CXXOperatorKind.None;
 
         public CallingConvention CallingConvention { get; set; }
 
@@ -173,25 +201,15 @@ namespace CppSharp.AST
 
         public Function InstantiatedFrom { get; set; }
 
-        public bool IsThisCall
-        {
-            get { return CallingConvention == CallingConvention.ThisCall; }
-        }
+        public QualifiedType FunctionType { get; set; }
 
-        public bool IsStdCall
-        {
-            get { return CallingConvention == CallingConvention.StdCall; }
-        }
+        public bool IsThisCall => CallingConvention == CallingConvention.ThisCall;
 
-        public bool IsFastCall
-        {
-            get { return CallingConvention == CallingConvention.FastCall; }
-        }
+        public bool IsStdCall => CallingConvention == CallingConvention.StdCall;
 
-        public bool IsCCall
-        {
-            get { return CallingConvention == CallingConvention.C; }
-        }
+        public bool IsFastCall => CallingConvention == CallingConvention.FastCall;
+
+        public bool IsCCall => CallingConvention == CallingConvention.C;
 
         public bool HasIndirectReturnTypeParameter
         {
@@ -224,64 +242,25 @@ namespace CppSharp.AST
         }
 
         public FunctionSynthKind SynthKind { get; set; }
-        public bool IsSynthetized { get { return SynthKind != FunctionSynthKind.None; } }
+        public bool IsSynthetized => SynthKind != FunctionSynthKind.None;
         public bool IsNonMemberOperator { get; set; }
 
         public Function OriginalFunction { get; set; }
 
         public string Mangled { get; set; }
-
         public string Signature { get; set; }
-
-        /// <summary>
-        /// Keeps an index that de-duplicates native names in the C# backend.
-        /// </summary>
-        public uint? Index { get; set; }
+        public string Body { get; set; }
 
         public override T Visit<T>(IDeclVisitor<T> visitor)
         {
             return visitor.VisitFunctionDecl(this);
         }
 
-        public Type Type { get { return ReturnType.Type; } }
-        public QualifiedType QualifiedType { get { return ReturnType; } }
-
-        public FunctionType GetFunctionType()
+        public Type Type => ReturnType.Type;
+        public QualifiedType QualifiedType
         {
-            var functionType = new FunctionType
-                                {
-                                    CallingConvention = this.CallingConvention,
-                                    ReturnType = this.ReturnType
-                                };
-
-            functionType.Parameters.AddRange(Parameters);
-            ReplaceIndirectReturnParamWithRegular(functionType);
-
-            return functionType;
-        }
-
-        static void ReplaceIndirectReturnParamWithRegular(FunctionType functionType)
-        {
-            for (var i = functionType.Parameters.Count - 1; i >= 0; i--)
-            {
-                var parameter = functionType.Parameters[i];
-                if (parameter.Kind != ParameterKind.IndirectReturnType)
-                    continue;
-
-                var ptrType = new PointerType
-                    {
-                        QualifiedPointee = new QualifiedType(parameter.Type)
-                    };
-
-                var retParam = new Parameter
-                    {
-                        Name = parameter.Name,
-                        QualifiedType = new QualifiedType(ptrType)
-                    };
-
-                functionType.Parameters.RemoveAt(i);
-                functionType.Parameters.Insert(i, retParam);
-            }
+            get { return ReturnType; }
+            set { ReturnType = value; }
         }
     }
 }

@@ -5,93 +5,97 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
+using Microsoft.VisualStudio.Setup.Configuration;
+using System.Runtime.InteropServices;
 
 namespace CppSharp
 {
-    /// Represents a Visual Studio version.
+    /// <summary>Represents a Visual Studio version.</summary>
     public enum VisualStudioVersion
     {
         VS2012 = 11,
         VS2013 = 12,
         VS2015 = 14,
+        VS2017 = 15,
         Latest,
     }
 
-    /// Represents a toolchain with associated version and directory.
+    /// <summary>Represents a toolchain with associated version and directory.</summary>
     public struct ToolchainVersion
     {
-        /// Version of the toolchain.
+        /// <summary>Version of the toolchain.</summary>
         public float Version;
 
-        /// Directory location of the toolchain.
+        /// <summary>Directory location of the toolchain.</summary>
         public string Directory;
 
-        /// Extra data value associated with the toolchain.
+        /// <summary>Extra data value associated with the toolchain.</summary>
         public string Value;
 
-        public override string ToString()
-        {
-            return string.Format("{0} (version: {1})", Directory, Version);
-        }
+        public bool IsValid => Version > 0 && !string.IsNullOrEmpty(Directory);
+
+        public override string ToString() => $"{Directory} (version: {Version})";
+    }
+
+    /// <summary>
+    /// Describes the major and minor version of something. 
+    /// Each version must be at least non negative and smaller than 100
+    /// </summary>
+    public struct Version
+    {
+        public int Major;
+        
+        public int Minor;
     }
 
     public static class MSVCToolchain
     {
-        static void DumpSdks(string sku, IEnumerable<ToolchainVersion> sdks)
-        {
-            Console.WriteLine("\n{0} SDKs:", sku);
-            foreach (var sdk in sdks)
-                Console.WriteLine("\t({0}) {1}", sdk.Version, sdk.Directory);
-        }
-
-        /// Dumps the detected SDK versions.
+        /// <summary>Dumps the detected SDK versions.</summary>
         public static void DumpSdks()
         {
-            List<ToolchainVersion> vsSdks;
-            GetVisualStudioSdks(out vsSdks);
+            List<ToolchainVersion> vsSdks = GetVisualStudioSdks();
             DumpSdks("Visual Studio", vsSdks);
 
-            List<ToolchainVersion> windowsSdks;
-            GetWindowsSdks(out windowsSdks);
+            List<ToolchainVersion> windowsSdks = GetWindowsSdks();
             DumpSdks("Windows", windowsSdks);
 
-            List<ToolchainVersion> windowsKitsSdks;
-            GetWindowsKitsSdks(out windowsKitsSdks);
+            List<ToolchainVersion> windowsKitsSdks = GetWindowsKitsSdks();
             DumpSdks("Windows Kits", windowsKitsSdks);
 
-            List<ToolchainVersion> netFrameworkSdks;
-            GetNetFrameworkSdks(out netFrameworkSdks);
+            List<ToolchainVersion> netFrameworkSdks = GetNetFrameworkSdks();
             DumpSdks(".NET Framework", netFrameworkSdks);
 
-            List<ToolchainVersion> msbuildSdks;
-            GetMSBuildSdks(out msbuildSdks);
+            List<ToolchainVersion> msbuildSdks = GetMSBuildSdks();
             DumpSdks("MSBuild", msbuildSdks);
         }
 
-        /// Dumps include directories for selected toolchain.
+        /// <summary>Dumps include directories for selected toolchain.</summary>
+        /// <param name="vsVersion">The version of Visual Studio to dump the SDK-s of.</param>
         public static void DumpSdkIncludes(VisualStudioVersion vsVersion =
             VisualStudioVersion.Latest)
         {
             Console.WriteLine("\nInclude search path (VS: {0}):", vsVersion);
-            var includes = GetSystemIncludes(vsVersion);
-            foreach (var include in includes)
-                Console.WriteLine("\t{0}", include);
+            foreach (var include in MSVCToolchain.GetSystemIncludes(vsVersion))
+                Console.WriteLine($"\t{include}");
         }
 
-        public static int GetCLVersion(VisualStudioVersion vsVersion)
+        public static Version GetCLVersion(VisualStudioVersion vsVersion)
         {
-            int clVersion;
+            Version clVersion;
             switch (vsVersion)
             {
                 case VisualStudioVersion.VS2012:
-                    clVersion = 17;
+                    clVersion = new Version { Major = 17, Minor = 0};
                     break;
                 case VisualStudioVersion.VS2013:
-                    clVersion = 18;
+                    clVersion = new Version { Major = 18, Minor = 0 };
                     break;
                 case VisualStudioVersion.VS2015:
+                    clVersion = new Version { Major = 19, Minor = 0 };
+                    break;
+                case VisualStudioVersion.VS2017:
                 case VisualStudioVersion.Latest:
-                    clVersion = 19;
+                    clVersion = new Version { Major = 19, Minor = 10 };
                     break;
                 default:
                     throw new Exception("Unknown Visual Studio version");
@@ -100,36 +104,15 @@ namespace CppSharp
             return clVersion;
         }
 
-        static int GetVisualStudioVersion(VisualStudioVersion version)
-        {
-            switch (version)
-            {
-                case VisualStudioVersion.VS2012:
-                    return 11;
-                case VisualStudioVersion.VS2013:
-                    return 12;
-                case VisualStudioVersion.VS2015:
-                case VisualStudioVersion.Latest:
-                    return 14;
-                default:
-                    throw new Exception("Unknown Visual Studio version");
-            }
-        }
-
         public static ToolchainVersion GetVSToolchain(VisualStudioVersion vsVersion)
         {
-            List<ToolchainVersion> vsSdks;
-            GetVisualStudioSdks(out vsSdks);
-
-            if (vsSdks.Count == 0)
+            if (VSSdks.Value.Count == 0)
                 throw new Exception("Could not find a valid Visual Studio toolchain");
 
-            var vsSdk = (vsVersion == VisualStudioVersion.Latest)
-                ? vsSdks.Last()
-                : vsSdks.Find(version =>
-                    (int)version.Version == GetVisualStudioVersion(vsVersion));
-
-            return vsSdk;
+            return (vsVersion == VisualStudioVersion.Latest)
+                ? VSSdks.Value.Last()
+                : VSSdks.Value.Find(version =>
+                    (int) version.Version == GetVisualStudioVersion(vsVersion));
         }
 
         public static ToolchainVersion GetWindowsKitsToolchain(VisualStudioVersion vsVersion,
@@ -153,43 +136,95 @@ namespace CppSharp
             if (match.Success)
                 windowsSdkMajorVer = int.Parse(match.Groups[1].Value);
 
-            match = Regex.Match(vcVarsFile, @"KitsRoot([1-9][0-9]*)");
+            match = Regex.Match(vcVarsFile, "KitsRoot([1-9][0-9]*)");
             if (match.Success)
                 kitsRootKey = match.Groups[0].Value;
 
-            List<ToolchainVersion> windowsKitsSdks;
-            GetWindowsKitsSdks(out windowsKitsSdks);
+            List<ToolchainVersion> windowsKitsSdks = GetWindowsKitsSdks();
 
             var windowsKitSdk = (!string.IsNullOrWhiteSpace(kitsRootKey))
                 ? windowsKitsSdks.Find(version => version.Value == kitsRootKey)
                 : windowsKitsSdks.Last();
-
             // If for some reason we cannot find the SDK version reported by VS
             // in the system, then fallback to the latest version found.
             if (windowsKitSdk.Value == null)
                 windowsKitSdk = windowsKitsSdks.Last();
-
             return windowsKitSdk;
         }
 
-        /// Gets the system include folders for the given Visual Studio version.
+        public static VisualStudioVersion FindVSVersion(VisualStudioVersion vsVersion)
+        {
+            if (vsVersion != VisualStudioVersion.Latest)
+            {
+                var vsSdk = GetVSToolchain(vsVersion);
+                if (vsSdk.IsValid)
+                    return vsVersion;
+            }
+
+            // we don't know what "latest" is on a given machine
+            // so start from the latest specified version and loop until a match is found 
+            for (var i = VisualStudioVersion.Latest - 1; i >= VisualStudioVersion.VS2012; i--)
+            {
+                vsVersion = FindVSVersion(i);
+                if (vsVersion != VisualStudioVersion.Latest)
+                    return vsVersion;
+            }
+
+            return VisualStudioVersion.Latest;
+        }
+
+        /// <summary>Gets the system include folders for the given Visual Studio version.</summary>
+        /// <param name="vsVersion">The version of Visual Studio to get
+        /// system includes from.</param>
         public static List<string> GetSystemIncludes(VisualStudioVersion vsVersion)
         {
             var vsSdk = GetVSToolchain(vsVersion);
+            var vsDir = vsSdk.Directory;
+            if (Path.GetFileName(vsDir) == "IDE")
+            {
+                string secondToLastDirPath = Path.GetDirectoryName(vsDir);
+                if (Path.GetFileName(secondToLastDirPath) == "Common7")
+                    vsDir = Path.GetDirectoryName(secondToLastDirPath);
+            }
+            return GetSystemIncludes(vsVersion, vsDir);
+        }
+
+        private static void DumpSdks(string sku, IEnumerable<ToolchainVersion> sdks)
+        {
+            Console.WriteLine("\n{0} SDKs:", sku);
+            foreach (var sdk in sdks)
+                Console.WriteLine("\t({0}) {1}", sdk.Version, sdk.Directory);
+        }
+
+        private static int GetVisualStudioVersion(VisualStudioVersion version)
+        {
+            switch (version)
+            {
+                case VisualStudioVersion.VS2012:
+                    return 11;
+                case VisualStudioVersion.VS2013:
+                    return 12;
+                case VisualStudioVersion.VS2015:
+                    return 14;
+                case VisualStudioVersion.VS2017:
+                case VisualStudioVersion.Latest:
+                    return 15;
+                default:
+                    throw new Exception("Unknown Visual Studio version");
+            }
+        }
+
+        private static List<string> GetSystemIncludes(VisualStudioVersion vsVersion, string vsDir)
+        {
+            if (vsVersion == VisualStudioVersion.VS2017)
+                return GetSystemIncludesVS2017(vsDir);
 
             int windowsSdkMajorVer;
             var windowsKitSdk = GetWindowsKitsToolchain(vsVersion, out windowsSdkMajorVer);
 
-            var vsDir = vsSdk.Directory;
-            vsDir = vsDir.Substring(0, vsDir.LastIndexOf(@"\Common7\IDE",
-                StringComparison.Ordinal));
+            List<ToolchainVersion> windowsSdks = GetWindowsSdks();
 
-            var includes = new List<string>();
-            includes.Add(Path.Combine(vsDir, @"VC\include"));
-
-            List<ToolchainVersion> windowsSdks;
-            GetWindowsSdks(out windowsSdks);
-
+            var includes = new List<string> { Path.Combine(vsDir, @"VC\include") };
             // Older Visual Studio versions provide their own Windows SDK.
             if (windowsSdks.Count == 0)
             {
@@ -209,7 +244,6 @@ namespace CppSharp
         private static IEnumerable<string> GetIncludeDirsFromWindowsSdks(
             int windowsSdkMajorVer, List<ToolchainVersion> windowsSdks)
         {
-            var includes = new List<string>();
             var majorWindowsSdk = windowsSdks.Find(
                 version => (int) Math.Floor(version.Version) == windowsSdkMajorVer);
             var windowsSdkDirs = majorWindowsSdk.Directory != null ?
@@ -219,12 +253,19 @@ namespace CppSharp
             {
                 if (windowsSdkMajorVer >= 8)
                 {
-                    var shared = Path.Combine(windowsSdkDir, "include", "shared");
-                    var um = Path.Combine(windowsSdkDir, "include", "um");
-                    var winrt = Path.Combine(windowsSdkDir, "include", "winrt");
-                    if (Directory.Exists(shared) && Directory.Exists(um) &&
-                        Directory.Exists(winrt))
-                        return new[] { shared, um, winrt };
+                    var windowsSdkIncludeDir = Path.Combine(windowsSdkDir, "include");
+                    IEnumerable<string> searchDirs = new[] { windowsSdkIncludeDir };
+                    if (Directory.Exists(windowsSdkIncludeDir))
+                        searchDirs = searchDirs.Union(Directory.EnumerateDirectories(windowsSdkIncludeDir));
+                    foreach (var dir in searchDirs)
+                    {
+                        var shared = Path.Combine(dir, "shared");
+                        var um = Path.Combine(dir, "um");
+                        var winrt = Path.Combine(dir, "winrt");
+                        if (Directory.Exists(shared) && Directory.Exists(um) &&
+                            Directory.Exists(winrt))
+                            return new[] { shared, um, winrt };
+                    }
                 }
                 else
                 {
@@ -247,7 +288,7 @@ namespace CppSharp
             if (File.Exists(vsVarsPath))
             {
                 var vsVarsFile = File.ReadAllText(vsVarsPath);
-                var match = Regex.Match(vsVarsFile, @"INCLUDE=%UniversalCRTSdkDir%(.+)%INCLUDE%");
+                var match = Regex.Match(vsVarsFile, "INCLUDE=%UniversalCRTSdkDir%(.+)%INCLUDE%");
                 if (match.Success)
                     ucrtPaths = match.Groups[1].Value;
             }
@@ -272,7 +313,7 @@ namespace CppSharp
                     var dirPrefix = windowsSdkMajorVer + ".";
                     var includeDir =
                         (from dir in Directory.EnumerateDirectories(parentIncludeDir).OrderByDescending(d => d)
-                         where Path.GetFileName(dir).StartsWith(dirPrefix)
+                         where Path.GetFileName(dir).StartsWith(dirPrefix, StringComparison.Ordinal)
                          select Path.Combine(windowsKitSdk.Directory, include, dir)).FirstOrDefault();
                     if (!string.IsNullOrEmpty(includeDir))
                         includes.Add(Path.Combine(includeDir, Path.GetFileName(path)));
@@ -284,133 +325,137 @@ namespace CppSharp
             return includes;
         }
 
+        /// <summary>
         /// Gets .NET framework installation directories.
-        public static bool GetNetFrameworkSdks(out List<ToolchainVersion> versions)
+        /// </summary>
+        /// <returns>Success of the operation</returns>
+        public static List<ToolchainVersion> GetNetFrameworkSdks()
         {
-            versions = new List<ToolchainVersion>();
-
-            GetToolchainsFromSystemRegistry(
+            List<ToolchainVersion> versions = GetToolchainsFromSystemRegistry(
                 "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\.NETFramework",
-                "InstallRoot", versions, RegistryView.Registry32);
+                "InstallRoot", RegistryView.Registry32);
 
             if (versions.Count == 0 && Environment.Is64BitProcess)
-            {
-                GetToolchainsFromSystemRegistry(
+                versions.AddRange(GetToolchainsFromSystemRegistry(
                     "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\.NETFramework",
-                    "InstallRoot", versions, RegistryView.Registry64);
-            }
+                    "InstallRoot", RegistryView.Registry64));
 
             versions.Sort((v1, v2) => (int)(v1.Version - v2.Version));
 
-            return versions.Count != 0;
+            return versions;
         }
 
+        /// <summary>
         /// Gets MSBuild installation directories.
-        public static bool GetMSBuildSdks(out List<ToolchainVersion> versions)
+        /// </summary>
+        /// 
+        /// <returns>Success of the operation</returns>
+        public static List<ToolchainVersion> GetMSBuildSdks()
         {
-            versions = new List<ToolchainVersion>();
-
-            GetToolchainsFromSystemRegistry(
+            List<ToolchainVersion> versions = GetToolchainsFromSystemRegistry(
                 "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\MSBuild\\ToolsVersions",
-                "MSBuildToolsPath", versions, RegistryView.Registry32);
+                "MSBuildToolsPath", RegistryView.Registry32);
 
             if (versions.Count == 0 && Environment.Is64BitProcess)
-            {
-                GetToolchainsFromSystemRegistry(
+                versions.AddRange(GetToolchainsFromSystemRegistry(
                     "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\MSBuild\\ToolsVersions",
-                    "MSBuildToolsPath", versions, RegistryView.Registry64);
-            }
+                    "MSBuildToolsPath", RegistryView.Registry64));
 
             versions.Sort((v1, v2) => (int)(v1.Version - v2.Version));
 
-            return versions.Count != 0;
+            return versions;
         }
 
+        /// <summary>
         /// Gets Windows SDK installation directories.
-        public static bool GetWindowsSdks(out List<ToolchainVersion> versions)
+        /// </summary>
+        /// <returns>Success of the operation</returns>
+        public static List<ToolchainVersion> GetWindowsSdks()
         {
-            versions = new List<ToolchainVersion>();
-
-            GetToolchainsFromSystemRegistry(
+            List<ToolchainVersion> versions = GetToolchainsFromSystemRegistry(
                 "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows",
-                "InstallationFolder", versions, RegistryView.Registry32);
+                "InstallationFolder", RegistryView.Registry32);
 
             if (versions.Count == 0 && Environment.Is64BitProcess)
-            {
-                GetToolchainsFromSystemRegistry(
+                versions.AddRange(GetToolchainsFromSystemRegistry(
                     "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Microsoft SDKs\\Windows",
-                    "InstallationFolder", versions, RegistryView.Registry64);
-            }
+                    "InstallationFolder", RegistryView.Registry64));
 
             versions.Sort((v1, v2) => (int)(v1.Version - v2.Version));
 
-            return versions.Count != 0;
+            return versions;
         }
 
+        /// <summary>
         /// Gets Windows Kits SDK installation directories.
-        public static bool GetWindowsKitsSdks(out List<ToolchainVersion> versions)
+        /// </summary>
+        /// <returns>Success of the operation</returns>
+        public static List<ToolchainVersion> GetWindowsKitsSdks()
         {
-            versions = new List<ToolchainVersion>();
-
-            GetToolchainsFromSystemRegistryValues(
+            List<ToolchainVersion> versions = GetToolchainsFromSystemRegistryValues(
                 "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots",
-                "KitsRoot", versions, RegistryView.Registry32);
+                "KitsRoot", RegistryView.Registry32);
 
             if (versions.Count == 0 && Environment.Is64BitProcess)
-            {
-                GetToolchainsFromSystemRegistryValues(
+                versions.AddRange(GetToolchainsFromSystemRegistryValues(
                     "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots",
-                    "KitsRoot", versions, RegistryView.Registry64);
-            }
+                    "KitsRoot", RegistryView.Registry64));
 
             versions.Sort((v1, v2) => (int)(v1.Version - v2.Version));
 
-            return true;
+            return versions;
         }
 
+        /// <summary>
         /// Gets Visual Studio installation directories.
-        public static bool GetVisualStudioSdks(out List<ToolchainVersion> versions)
+        /// </summary>
+        /// <param name="versions">Collection holding information about available Visual Studio instances</param>
+        /// <returns>Success of the operation</returns>
+        public static List<ToolchainVersion> GetVisualStudioSdks()
         {
-            versions = new List<ToolchainVersion>();
-
-            GetToolchainsFromSystemRegistry(
+            var versions = GetToolchainsFromSystemRegistry(
                 "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio",
-                "InstallDir", versions, RegistryView.Registry32);
+                "InstallDir", RegistryView.Registry32);
 
             if (versions.Count == 0 && Environment.Is64BitProcess)
-            {
-                GetToolchainsFromSystemRegistry(
+                versions.AddRange(GetToolchainsFromSystemRegistry(
                     "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio",
-                    "InstallDir", versions, RegistryView.Registry64);
-            }
+                    "InstallDir", RegistryView.Registry64));
 
-            GetToolchainsFromSystemRegistry(
+            versions.AddRange(GetToolchainsFromSystemRegistry(
                 "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VCExpress",
-                "InstallDir", versions, RegistryView.Registry32);
+                "InstallDir", RegistryView.Registry32));
 
             if (versions.Count == 0 && Environment.Is64BitProcess)
-            {
-                GetToolchainsFromSystemRegistry(
+                versions.AddRange(GetToolchainsFromSystemRegistry(
                     "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VCExpress",
-                    "InstallDir", versions, RegistryView.Registry64);
-            }
+                    "InstallDir", RegistryView.Registry64));
+
+            //Check for VS 2017
+            GetVs2017Instances(versions);
 
             versions.Sort((v1, v2) => (int)(v1.Version - v2.Version));
-
-            return true;
+            return versions;
         }
 
+        /// <summary>
         /// Read registry strings looking for matching values.
-        public static bool GetToolchainsFromSystemRegistryValues(string keyPath,
-            string matchValue, ICollection<ToolchainVersion> entries, RegistryView view)
+        /// </summary>
+        /// <param name="keyPath">The path to the key in the registry.</param>
+        /// <param name="matchValue">The value to match in the located key, if any.</param>
+        /// <param name="view">The type of registry, 32 or 64, to target.</param>
+        /// 
+        public static List<ToolchainVersion> GetToolchainsFromSystemRegistryValues(
+            string keyPath, string matchValue, RegistryView view)
         {
             string subKey;
             var hive = GetRegistryHive(keyPath, out subKey);
             using (var rootKey = RegistryKey.OpenBaseKey(hive, view))
             using (var key = rootKey.OpenSubKey(subKey, writable: false))
             {
+                var entries = new List<ToolchainVersion>();
                 if (key == null)
-                    return false;
+                    return entries;
 
                 foreach (var valueName in key.GetValueNames())
                 {
@@ -440,11 +485,12 @@ namespace CppSharp
 
                     entries.Add(entry);
                 }
-            }
 
-            return true;
+                return entries;
+            }
         }
 
+        /// <summary>
         /// Read registry string.
         /// This also supports a means to look for high-versioned keys by use
         /// of a $VERSION placeholder in the key path.
@@ -453,16 +499,22 @@ namespace CppSharp
         /// I.e. "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio".
         /// There can be additional characters in the component.  Only the numeric
         /// characters are compared.
-        static bool GetToolchainsFromSystemRegistry(string keyPath, string valueName,
-            ICollection<ToolchainVersion> entries, RegistryView view)
+        /// </summary>
+        /// <param name="keyPath">The path to the key in the registry.</param>
+        /// <param name="valueName">The name of the value in the registry.</param>
+        /// <param name="matchValue">The value to match in the located key, if any.</param>
+        /// <param name="view">The type of registry, 32 or 64, to target.</param>
+        private static List<ToolchainVersion> GetToolchainsFromSystemRegistry(
+            string keyPath, string valueName, RegistryView view)
         {
             string subKey;
             var hive = GetRegistryHive(keyPath, out subKey);
             using (var rootKey = RegistryKey.OpenBaseKey(hive, view))
             using (var key = rootKey.OpenSubKey(subKey, writable: false))
             {
+                var entries = new List<ToolchainVersion>();
                 if (key == null)
-                    return false;
+                    return entries;
 
                 foreach (var subKeyName in key.GetSubKeyNames())
                 {
@@ -471,12 +523,11 @@ namespace CppSharp
                         subKeyName))
                         entries.Add(entry);
                 }
+                return entries;
             }
-
-            return true;
         }
 
-        static bool HandleToolchainRegistrySubKey(out ToolchainVersion entry,
+        private static bool HandleToolchainRegistrySubKey(out ToolchainVersion entry,
             RegistryKey key, string valueName, string subKeyName)
         {
             entry = new ToolchainVersion();
@@ -512,27 +563,27 @@ namespace CppSharp
             return true;
         }
 
-        static RegistryHive GetRegistryHive(string keyPath, out string subKey)
+        private static RegistryHive GetRegistryHive(string keyPath, out string subKey)
         {
             var hive = (RegistryHive)0;
             subKey = null;
 
-            if (keyPath.StartsWith("HKEY_CLASSES_ROOT\\"))
+            if (keyPath.StartsWith("HKEY_CLASSES_ROOT\\", StringComparison.Ordinal))
             {
                 hive = RegistryHive.ClassesRoot;
                 subKey = keyPath.Substring(18);
             }
-            else if (keyPath.StartsWith("HKEY_USERS\\"))
+            else if (keyPath.StartsWith("HKEY_USERS\\", StringComparison.Ordinal))
             {
                 hive = RegistryHive.Users;
                 subKey = keyPath.Substring(11);
             }
-            else if (keyPath.StartsWith("HKEY_LOCAL_MACHINE\\"))
+            else if (keyPath.StartsWith("HKEY_LOCAL_MACHINE\\", StringComparison.Ordinal))
             {
                 hive = RegistryHive.LocalMachine;
                 subKey = keyPath.Substring(19);
             }
-            else if (keyPath.StartsWith("HKEY_CURRENT_USER\\"))
+            else if (keyPath.StartsWith("HKEY_CURRENT_USER\\", StringComparison.Ordinal))
             {
                 hive = RegistryHive.CurrentUser;
                 subKey = keyPath.Substring(18);
@@ -540,5 +591,162 @@ namespace CppSharp
 
             return hive;
         }
+
+        private static Lazy<List<ToolchainVersion>> VSSdks =
+            new Lazy<List<ToolchainVersion>>(GetVisualStudioSdks, true);
+
+        #region VS2017
+
+        /// <summary>
+        /// Returns all system includes of the installed VS 2017 instance.
+        /// </summary>
+        /// <param name="vsDir">Path to the visual studio installation (for identifying the correct instance)</param>
+        /// <returns>The system includes</returns>
+        private static List<string> GetSystemIncludesVS2017(string vsDir)
+        {
+            List<string> includes = new List<string>();
+            //They includes are in a different folder
+            const int REGDB_E_CLASSNOTREG = unchecked((int)0x80040154);
+            try
+            {
+                var query = new SetupConfiguration();
+                var query2 = (ISetupConfiguration2) query;
+                var e = query2.EnumAllInstances();
+
+                int fetched;
+                var instances = new ISetupInstance[1];
+                var regexWinSDK10Version = new Regex(@"Windows10SDK\.(\d+)\.?");
+                do
+                {
+                    e.Next(1, instances, out fetched);
+                    if (fetched > 0)
+                    {
+                        var instance = (ISetupInstance2) instances[0];
+                        if (instance.GetInstallationPath() != vsDir) continue;
+                        var packages = instance.GetPackages();
+                        var vc_tools = from package in packages
+                                       where package.GetId().Contains("Microsoft.VisualStudio.Component.VC.Tools")
+                                       orderby package.GetId()
+                                       select package;
+                        if (vc_tools.Any())
+                        { // Tools found, get path
+                            var path = instance.GetInstallationPath();
+                            var versionFilePath = path + @"\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt";
+                            var version = System.IO.File.ReadLines(versionFilePath).ElementAt(0).Trim();
+                            includes.Add(path + @"\VC\Tools\MSVC\" + version + @"\include");
+                            includes.Add(path + @"\VC\Tools\MSVC\" + version + @"\atlmfc\include");
+                        }
+                        var sdks = from package in packages
+                                   where package.GetId().Contains("Windows10SDK") || package.GetId().Contains("Windows81SDK") || package.GetId().Contains("Win10SDK_10")
+                                   select package;
+                        var win10sdks = from sdk in sdks
+                                        where sdk.GetId().Contains("Windows10SDK")
+                                        select sdk;
+                        var win8sdks = from sdk in sdks
+                                       where sdk.GetId().Contains("Windows81SDK")
+                                       select sdk;
+                        if (win10sdks.Any())
+                        {
+                            var sdk = win10sdks.Last();
+                            var matchVersion = regexWinSDK10Version.Match(sdk.GetId());
+                            string path;
+                            if (matchVersion.Success)
+                            {
+                                Environment.SpecialFolder specialFolder = Environment.Is64BitOperatingSystem ?
+                                    Environment.SpecialFolder.ProgramFilesX86 : Environment.SpecialFolder.ProgramFiles;
+                                var programFiles = Environment.GetFolderPath(specialFolder);
+                                path = Path.Combine(programFiles, "Windows Kits", "10", "include",
+                                    $"10.0.{matchVersion.Groups[1].Value}.0");
+                            }
+                            else
+                            {
+                                path = "<invalid>";
+                            }
+                            var shared = Path.Combine(path, "shared");
+                            var um = Path.Combine(path, "um");
+                            var winrt = Path.Combine(path, "winrt");
+                            var ucrt = Path.Combine(path, "ucrt");
+                            Console.WriteLine(path);
+                            if (Directory.Exists(shared) &&
+                                Directory.Exists(um) &&
+                                Directory.Exists(winrt) &&
+                                Directory.Exists(ucrt))
+                            {
+                                includes.Add(shared);
+                                includes.Add(um);
+                                includes.Add(winrt);
+                                includes.Add(ucrt);
+                            }
+                        }
+                        else if (win8sdks.Any())
+                        {
+                            includes.Add(@"C:\Program Files (x86)\Windows Kits\8.1\include\shared");
+                            includes.Add(@"C:\Program Files (x86)\Windows Kits\8.1\include\um");
+                            includes.Add(@"C:\Program Files (x86)\Windows Kits\8.1\include\winrt");
+                        }
+
+                        return includes; //We've collected all information.
+                    }
+
+                }
+                while (fetched > 0);
+            }
+            // a COM exception means the VS 2017 COM API (therefore VS itself) is not installed, ignore
+            catch (COMException ex) when (ex.HResult == REGDB_E_CLASSNOTREG)
+            {
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error 0x{ex.HResult:x8}: {ex.Message}");
+            }
+            return includes;
+        }
+
+        /// <summary>
+        /// Tries to get all vs 2017 instances. 
+        /// </summary>
+        /// <param name="versions">Collection holding available visual studio instances</param>
+        /// <returns>Success of the operation</returns>
+        private static bool GetVs2017Instances(ICollection<ToolchainVersion> versions)
+        {
+            const int REGDB_E_CLASSNOTREG = unchecked((int) 0x80040154);
+            try
+            {
+                var query = new SetupConfiguration();
+                var query2 = (ISetupConfiguration2) query;
+                var e = query2.EnumAllInstances();
+                int fetched;
+                var instances = new ISetupInstance[1];
+                do
+                {
+                    e.Next(1, instances, out fetched);
+                    if (fetched > 0)
+                    {
+                        var instance = (ISetupInstance2) instances[0];
+                        var toolchain = new ToolchainVersion
+                        {
+                            Directory = instance.GetInstallationPath() + @"\Common7\IDE",
+                            Version = float.Parse(instance.GetInstallationVersion().Remove(2)),
+                            Value = null // Not used currently
+                        };
+                        versions.Add(toolchain);
+                    }
+                }
+                while (fetched > 0);
+            }
+            // a COM exception means the VS 2017 COM API (therefore VS itself) is not installed, ignore
+            catch (COMException ex) when (ex.HResult == REGDB_E_CLASSNOTREG)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error 0x{ex.HResult:x8}: {ex.Message}");
+                return false;
+            }
+            return true;
+        }
+
+        #endregion
     }
 }

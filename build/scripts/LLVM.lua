@@ -4,6 +4,14 @@ require "../Helpers"
 
 local llvm = path.getabsolute(basedir .. "/../deps/llvm")
 
+-- Prevent premake from inserting /usr/lib64 search path on linux. GCC does not need this path specified
+-- as compiler automatically knows where to look for system libs. Insertion of this path causes issues
+-- when system has clang/llvm libs installed. Build would link to system libraries instead of custom
+-- build required by CppSharp.
+if os.istarget("linux") then
+	premake.tools.gcc.libraryDirectories['architecture']['x86_64'] = function(cfg) return {} end
+end
+
 -- If we are inside vagrant then clone and build LLVM outside the shared folder,
 -- otherwise file I/O performance will be terrible.
 if is_vagrant() then
@@ -25,76 +33,107 @@ function clone_llvm()
   local clang_release = get_clang_rev()
   print("Clang release: " .. clang_release)
 
-  if os.isdir(llvm) and not os.isdir(llvm .. "/.git") then
-    error("LLVM directory is not a git repository.")
-  end
-
-  if not os.isdir(llvm) then
-    git.clone(llvm, "https://github.com/llvm-mirror/llvm.git")
+  if os.ishost("windows") then
+    extract = extract_7z
   else
-    git.reset_hard(llvm, "HEAD")
-    git.pull_rebase(llvm)
+    extract = extract_tar_gz
   end
 
-  local clang = llvm .. "/tools/clang"
-  if not os.isdir(clang) then
-    git.clone(clang, "https://github.com/llvm-mirror/clang.git")
+  local archive = 'llvm-'..llvm_release..'.tar.gz'
+  if os.isfile(archive) then
+    print('Archive '..archive..' already exists.')
   else
-    git.reset_hard(clang, "HEAD")
-    git.pull_rebase(clang)
+    download('https://github.com/llvm-mirror/llvm/archive/'..llvm_release..'.tar.gz', archive)
   end
 
-  git.reset_hard(llvm, llvm_release)
-  git.reset_hard(clang, clang_release)
+  if os.isdir(llvm) then
+    os.rmdir(llvm)
+    if os.isdir(llvm) then
+      print('Removing '..llvm..' directory failed. Please remove it manually and restart.')
+      return
+    end
+  end
+
+  extract(archive, '.')
+  os.rename('llvm-'..llvm_release, llvm)
+
+  archive = 'clang-'..clang_release..'.tar.gz'
+  if os.isfile(archive) then
+    print('Archive '..archive..' already exists.')
+  else
+    download('https://github.com/llvm-mirror/clang/archive/'..clang_release..'.tar.gz', archive)
+  end
+  extract(archive, '.')
+  os.rename('clang-'..clang_release, llvm..'/tools/clang')
+end
+function get_vs_version()
+  local function map_msvc_to_vs_version(major, minor)
+    if major == "19" and minor >= "10" then return "vs2017"
+    elseif major == "19" then return "vs2015"
+    elseif major == "18" then return "vs2013"
+    elseif major == "17" then return "vs2012"
+    else error("Unknown MSVC compiler version, run in VS command prompt.") end
+  end
+
+  local out = outputof("cl")
+  local major, minor = string.match(out, '(%d+).(%d+).%d+.?%d*%s+')
+  
+  return map_msvc_to_vs_version(major, minor)
 end
 
-function get_toolset_configuration_name()
-  if os.is("windows") then
-    local function get_vs_version(ver)
-      if     ver == "19" then return "vs2015"
-      elseif ver == "18" then return "vs2013"
-      elseif ver == "17" then return "vs2012"
-      else error("Unknown MSVC compiler version, run in VS command prompt.") end
-    end
+function get_toolset_configuration_name(arch)
+  if not arch then
+    arch = target_architecture()
+  end
 
+  if os.istarget("windows") then
     local vsver = _ACTION
-    local arch = "x86"
 
     if not string.starts(vsver, "vs") then
-      local out = outputof("cl")
-      local ver, arch = string.match(out, 'Version (%d+)%.%d+%.%d+%.?%d* for (%w+)')
-      vsver = get_vs_version(ver)
+      vsver = get_vs_version()
     end
 
     return table.concat({vsver, arch}, "-")
   end
   -- FIXME: Implement for non-Windows platforms
-  return nil
+  return table.concat({arch}, "-")
 end
 
 -- Returns a string describing the package configuration.
 -- Example: llvm-f79c5c-windows-vs2015-x86-Debug
-function get_llvm_package_name(rev, conf, toolset)
+function get_llvm_package_name(rev, conf, arch)
   if not rev then
   	rev = get_llvm_rev()
   end
   rev = string.sub(rev, 0, 6)
 
+  local components = {"llvm", rev, os.target()}
+
+  local toolset = get_toolset_configuration_name(arch)
+  table.insert(components, toolset)
+
+  if os.istarget("linux") then
+    local version = GccVersion()
+    if version < "5.0.0" then
+      -- Minor version matters only with gcc 4.8/4.9
+      version = string.match(version, "%d+.%d+")
+    else
+      version = string.match(version, "%d+")
+    end
+    table.insert(components, "gcc-"..version)
+  end
+
   if not conf then
   	conf = get_llvm_configuration_name()
   end
 
-  if not toolset then
-    toolset = get_toolset_configuration_name()
-  end
-
-  local components = {"llvm", rev, os.get()}
-
-  if toolset then
-    table.insert(components, toolset)
-  end
-
   table.insert(components, conf)
+
+  if os.istarget("linux") then
+    if GccVersion() >= "4.9.0" and not UseCxx11ABI() then
+      table.insert(components, "no-cxx11")
+    end
+  end
 
   return table.concat(components, "-")
 end
@@ -103,7 +142,7 @@ function get_llvm_configuration_name(debug)
 	if debug == true then
 		return "Debug"
 	end
-	return os.is("windows") and "RelWithDebInfo" or "Release"
+	return os.istarget("windows") and "RelWithDebInfo" or "Release"
 end
 
 function get_7z_path()
@@ -124,17 +163,22 @@ function extract_tar_xz(archive, dest_dir)
 	return execute_or_die(string.format("tar xJf %s -C %s", archive, dest_dir), true)
 end
 
-local use_7zip = os.is("windows")
+function extract_tar_gz(archive, dest_dir)
+	execute("mkdir -p " .. dest_dir, true)
+	return execute_or_die(string.format("tar xf %s -C %s", archive, dest_dir), true)
+end
+
+local use_7zip = os.ishost("windows")
 local archive_ext = use_7zip and ".7z" or ".tar.xz"
 
 function download_llvm()
   local toolset = get_toolset_configuration_name()
-  if toolset == "vs2012" or toolset == "vs2013" then
+  if toolset == "vs2012" or toolset == "vs2013" or toolset == "vs2015" then
     error("Pre-compiled LLVM packages for your VS version are not available.\n" ..
           "Please upgrade to a newer VS version or compile LLVM manually.")
   end
 
-  local base = "https://dl.dropboxusercontent.com/u/194502/CppSharp/llvm/"
+  local base = "https://github.com/mono/CppSharp/releases/download/CppSharp/"
   local pkg_name = get_llvm_package_name()
   local archive = pkg_name .. archive_ext
 
@@ -160,10 +204,22 @@ end
 function cmake(gen, conf, builddir, options)
 	local cwd = os.getcwd()
 	os.chdir(builddir)
-	local cmake = os.is("macosx") and "/Applications/CMake.app/Contents/bin/cmake"
+	local cmake = os.ishost("macosx") and "/Applications/CMake.app/Contents/bin/cmake"
 		or "cmake"
+
+	if options == nil then
+		options = ""
+	end
+	if not UseCxx11ABI() then
+		options = options.." -DCMAKE_CXX_FLAGS='-D_GLIBCXX_USE_CXX11_ABI=0'"
+	end
+
 	local cmd = cmake .. " -G " .. '"' .. gen .. '"'
  		.. ' -DLLVM_BUILD_TOOLS=false '
+ 		.. ' -DLLVM_ENABLE_LIBEDIT=false'
+ 		.. ' -DLLVM_ENABLE_ZLIB=false'
+ 		.. ' -DLLVM_ENABLE_TERMINFO=false'
+ 		.. ' -DLLVM_ENABLE_LIBXML2=false'
  		.. ' -DLLVM_INCLUDE_EXAMPLES=false '
  		.. ' -DLLVM_INCLUDE_DOCS=false '
  		.. ' -DLLVM_INCLUDE_TESTS=false'
@@ -230,12 +286,12 @@ function cmake(gen, conf, builddir, options)
  		.. ' -DCLANG_TOOL_C_ARCMT_TEST_BUILD=false'
  		.. ' -DCLANG_TOOL_C_INDEX_TEST_BUILD=false'
  		.. ' -DCLANG_TOOL_DIAGTOOL_BUILD=false'
- 		.. ' -DCLANG_TOOL_DRIVER_BUILD=false'
  		.. ' -DCLANG_TOOL_LIBCLANG_BUILD=false'
  		.. ' -DCLANG_TOOL_SCAN_BUILD_BUILD=false'
  		.. ' -DCLANG_TOOL_SCAN_VIEW_BUILD=false'
  		.. ' -DLLVM_TARGETS_TO_BUILD="X86"'
  		.. ' -DCMAKE_BUILD_TYPE=' .. conf .. ' ..'
+ 		.. ' -DCMAKE_OSX_DEPLOYMENT_TARGET=10.11'
  		.. ' ' .. options
  	execute_or_die(cmd)
  	os.chdir(cwd)
@@ -243,6 +299,17 @@ end
 
 function clean_llvm(llvm_build)
 	if os.isdir(llvm_build) then os.rmdir(llvm_build) end
+end
+
+function get_cmake_generator()
+	local vsver = get_vs_version()
+	if vsver == "vs2017" then
+		return "Visual Studio 15 2017"
+	elseif vsver == "vs2015" then
+		return "Visual Studio 14 2015"
+	else
+		error("Cannot map to CMake configuration due to unknown MSVC version")
+	end
 end
 
 function build_llvm(llvm_build)
@@ -255,21 +322,25 @@ function build_llvm(llvm_build)
 
 	local conf = get_llvm_configuration_name()
 	local use_msbuild = false
-	if os.is("windows") and use_msbuild then
-		cmake("Visual Studio 14 2015", conf, llvm_build)
+	if os.ishost("windows") and use_msbuild then
+		cmake(get_cmake_generator(), conf, llvm_build)
 		local llvm_sln = path.join(llvm_build, "LLVM.sln")
 		msbuild(llvm_sln, conf)
 	else
-		local options = os.is("macosx") and
-			"-DLLVM_ENABLE_LIBCXX=true -DLLVM_BUILD_32_BITS=true" or "" 
+		local options = os.ishost("macosx") and
+			"-DLLVM_ENABLE_LIBCXX=true" or ""
+		local is32bits = target_architecture() == "x86"
+		if is32bits then
+			options = options .. (is32bits and " -DLLVM_BUILD_32_BITS=true" or "")
+		end
 		cmake("Ninja", conf, llvm_build, options)
-		ninja(llvm_build)
-		ninja(llvm_build, "clang-headers")
+		ninja('"' .. llvm_build .. '"')
+		ninja('"' .. llvm_build .. '"', "clang-headers")
 	end
 end
 
 function package_llvm(conf, llvm, llvm_build)
-	local rev = git.rev_parse(llvm, "HEAD")
+	local rev = git.rev_parse('"' .. llvm .. '"', "HEAD")
 	if string.is_empty(rev) then
 		rev = get_llvm_rev()
 	end
@@ -283,11 +354,11 @@ function package_llvm(conf, llvm, llvm_build)
 	os.copydir(llvm_build .. "/include", out .. "/build/include")
 
 	local llvm_msbuild_libdir = "/" .. conf .. "/lib"
-	local lib_dir =  os.is("windows") and os.isdir(llvm_msbuild_libdir)
+	local lib_dir =  os.ishost("windows") and os.isdir(llvm_msbuild_libdir)
 		and llvm_msbuild_libdir or "/lib"
 	local llvm_build_libdir = llvm_build .. lib_dir
 
-	if os.is("windows") and os.isdir(llvm_build_libdir) then
+	if os.ishost("windows") and os.isdir(llvm_build_libdir) then
 		os.copydir(llvm_build_libdir, out .. "/build" .. lib_dir, "*.lib")
 	else
 		os.copydir(llvm_build_libdir, out .. "/build/lib", "*.a")
@@ -299,15 +370,16 @@ function package_llvm(conf, llvm, llvm_build)
 
 	os.copydir(llvm .. "/tools/clang/lib/CodeGen", out .. "/tools/clang/lib/CodeGen", "*.h")
 	os.copydir(llvm .. "/tools/clang/lib/Driver", out .. "/tools/clang/lib/Driver", "*.h")
+	os.copydir(llvm .. "/tools/clang/lib/Driver/ToolChains", out .. "/tools/clang/lib/Driver/ToolChains", "*.h")
 
 	local out_lib_dir = out .. "/build" .. lib_dir
-	if os.is("windows") then
+	if os.ishost("windows") then
 		os.rmfiles(out_lib_dir, "LLVM*ObjCARCOpts*.lib")
 		os.rmfiles(out_lib_dir, "clang*ARC*.lib")
 		os.rmfiles(out_lib_dir, "clang*Matchers*.lib")
 		os.rmfiles(out_lib_dir, "clang*Rewrite*.lib")
 		os.rmfiles(out_lib_dir, "clang*StaticAnalyzer*.lib")
-		os.rmfiles(out_lib_dir, "clang*Tooling*.lib")		
+		os.rmfiles(out_lib_dir, "clang*Tooling*.lib")
 	else
 		os.rmfiles(out_lib_dir, "libllvm*ObjCARCOpts*.a")
 		os.rmfiles(out_lib_dir, "libclang*ARC*.a")
@@ -343,7 +415,7 @@ if _ACTION == "clone_llvm" then
 end
 
 if _ACTION == "build_llvm" then
-  local llvm_build = path.join(llvm, get_llvm_package_name())	
+  local llvm_build = path.join(llvm, get_llvm_package_name())
   clean_llvm(llvm_build)
   build_llvm(llvm_build)
   os.exit()
@@ -351,7 +423,7 @@ end
 
 if _ACTION == "package_llvm" then
   local conf = get_llvm_configuration_name()
-  local llvm_build = path.join(llvm, get_llvm_package_name())	
+  local llvm_build = path.join(llvm, get_llvm_package_name())
   local pkg = package_llvm(conf, llvm, llvm_build)
   archive_llvm(pkg)
   os.exit()

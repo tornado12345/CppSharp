@@ -24,9 +24,10 @@ namespace CppSharp.Passes
         public override bool VisitASTContext(ASTContext context)
         {
             // we need this one for marshalling std::string
-            foreach (var allocator in context.FindClass("allocator", false, true).Where(
-                a => a.TranslationUnit.IsSystemHeader))
-                usedStdTypes.Add(allocator);
+            foreach (var name in new[] { "allocator", "char_traits" })
+                foreach (var usedStdType in context.FindClass(name, false, true).Where(
+                    a => a.TranslationUnit.IsSystemHeader))
+                    usedStdTypes.Add(usedStdType);
 
             var result = base.VisitASTContext(context);
 
@@ -93,7 +94,8 @@ namespace CppSharp.Passes
                 var nestedContext = declaration as Namespace;
                 if (nestedContext != null)
                     RemoveUnusedStdTypes(nestedContext);
-                else if (!this.usedStdTypes.Contains(declaration))
+                else if (!this.usedStdTypes.Contains(declaration) &&
+                    !declaration.IsExplicitlyGenerated)
                     context.Declarations.RemoveAt(i);
             }
         }

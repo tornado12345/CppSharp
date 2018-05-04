@@ -19,14 +19,13 @@ end
 function execute(cmd, quiet)
   print(cmd)
   if not quiet then
-    return os.execute(cmd)
+    local status, exit, err = os.execute(cmd)
+    return err
   else
     local file = assert(io.popen(cmd .. " 2>&1", "r"))
     local output = file:read('*all')
-    file:close()
-    -- FIXME: Lua 5.2 returns the process exit code from close()
-    -- Update this once Premake upgrades from Lua 5.1
-    return 0
+    local status, exit, err = file:close()
+    return err
   end
 end
 
@@ -43,13 +42,13 @@ function sudo(cmd)
 end
 
 function is_vagrant()
-  return os.isdir("/home/vagrant")
+  return os.isdir("/vagrant")
 end
 
 git = {}
 
 -- Remove once https://github.com/premake/premake-core/pull/307 is merged.
-local sep = os.is("windows") and "\\" or "/"
+local sep = os.ishost("windows") and "\\" or "/"
 
 function git.clone(dir, url, target)
   local cmd = "git clone " .. url .. " " .. path.translate(dir, sep) 
@@ -75,6 +74,9 @@ function git.checkout(dir, rev)
 end
 
 function git.rev_parse(dir, rev)
+  if not os.isdir(dir .. "/.git") then
+    return nil
+  end
   local cmd = "git -C " .. path.translate(dir, sep) .. " rev-parse " .. rev
   return outputof(cmd)
 end

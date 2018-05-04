@@ -56,11 +56,31 @@ class TemplateClass
         int i;
         float f;
     };
+    T t;
+};
+
+template <typename T>
+class TemplateWithIndependentFields
+{
+public:
+    void useDependentPointer(const T* t);
 };
 
 class DLL_API HasVirtualInCore
 {
 public:
     HasVirtualInCore();
+    HasVirtualInCore(TemplateClass<HasVirtualInCore> t);
     virtual int virtualInCore(int parameter);
+};
+
+class DLL_API DerivedFromSecondaryBaseInDependency;
+typedef DerivedFromSecondaryBaseInDependency RenameDerivedBeforeBase;
+
+class DLL_API SecondaryBase
+{
+public:
+    SecondaryBase();
+    ~SecondaryBase();
+    void function();
 };

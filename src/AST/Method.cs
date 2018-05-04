@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using CppSharp.AST.Extensions;
 
 namespace CppSharp.AST
@@ -92,7 +94,7 @@ namespace CppSharp.AST
             Access = method.Access;
             IsVirtual = method.IsVirtual;
             IsConst = method.IsConst;
-            IsOverride = method.IsOverride;
+            IsFinal = method.IsFinal;
             IsProxy = method.IsProxy;
             IsStatic = method.IsStatic;
             Kind = method.Kind;
@@ -102,6 +104,8 @@ namespace CppSharp.AST
             Conversion = method.Conversion;
             SynthKind = method.SynthKind;
             AdjustedOffset = method.AdjustedOffset;
+            OverriddenMethods.AddRange(method.OverriddenMethods);
+            ConvertToProperty = method.ConvertToProperty;
         }
 
         public Method(Function function)
@@ -114,7 +118,18 @@ namespace CppSharp.AST
         public bool IsStatic { get; set; }
         public bool IsConst { get; set; }
         public bool IsExplicit { get; set; }
-        public bool IsOverride { get; set; }
+
+        public bool IsOverride
+        {
+            get { return isOverride ?? OverriddenMethods.Any(); }
+            set { isOverride = value; }
+        }
+
+        public Method BaseMethod => OverriddenMethods.FirstOrDefault();
+
+        // True if the method is final / sealed.
+        public bool IsFinal { get; set; }
+
         public bool IsProxy { get; set; }
 
         public RefQualifier RefQualifier { get; set; }
@@ -156,9 +171,21 @@ namespace CppSharp.AST
 
         public int AdjustedOffset { get; set; }
 
+        public List<Method> OverriddenMethods { get; } = new List<Method>();
+
+        public bool ConvertToProperty { get; set; }
+
+        public Method GetRootBaseMethod()
+        {
+            return BaseMethod == null || BaseMethod.BaseMethod == null ?
+                BaseMethod : BaseMethod.GetRootBaseMethod();
+        }
+
         public override T Visit<T>(IDeclVisitor<T> visitor)
         {
             return visitor.VisitMethodDecl(this);
         }
+
+        private bool? isOverride;
     }
 }

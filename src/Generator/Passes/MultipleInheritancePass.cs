@@ -1,7 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
 using CppSharp.AST;
-using CppSharp.Generators.CSharp;
+using CppSharp.Generators;
 
 namespace CppSharp.Passes
 {
@@ -13,7 +13,7 @@ namespace CppSharp.Passes
         /// We also need it to check if a class already has a complementary interface
         /// because different classes may have the same secondary bases.
         /// </summary>
-        private readonly Dictionary<Class, Class> interfaces = new Dictionary<Class, Class>();
+        private readonly HashSet<Class> interfaces = new HashSet<Class>();
 
         public MultipleInheritancePass()
         {
@@ -30,8 +30,11 @@ namespace CppSharp.Passes
         public override bool VisitTranslationUnit(TranslationUnit unit)
         {
             bool result = base.VisitTranslationUnit(unit);
-            foreach (var @interface in interfaces)
-                @interface.Key.Namespace.Classes.Add(@interface.Value);
+            foreach (var @interface in interfaces.Where(i => !(i is ClassTemplateSpecialization)))
+            {
+                int index = @interface.Namespace.Declarations.IndexOf(@interface.OriginalClass);
+                @interface.Namespace.Declarations.Insert(index, @interface);
+            }
             interfaces.Clear();
             return result;
         }
@@ -46,7 +49,7 @@ namespace CppSharp.Passes
             {
                 var @base = @class.Bases[i];
                 var baseClass = @base.Class;
-                if (baseClass == null || baseClass.IsInterface) continue;
+                if (baseClass == null || baseClass.IsInterface || !baseClass.IsGenerated) continue;
 
                 var @interface = GetInterface(baseClass);
                 @class.Bases[i] = new BaseClassSpecifier(@base) { Type = new TagType(@interface) };
@@ -60,24 +63,37 @@ namespace CppSharp.Passes
         {
             if (@base.CompleteDeclaration != null)
                 @base = (Class) @base.CompleteDeclaration;
-            var name = "I" + @base.Name;
-            if (interfaces.ContainsKey(@base))
-                return interfaces[@base];
 
-            return @base.Namespace.Classes.FirstOrDefault(c => c.Name == name) ??
-                GetNewInterface(name, @base);
+            return interfaces.FirstOrDefault(i => i.OriginalClass == @base) ??
+                GetNewInterface("I" + @base.Name, @base);
         }
 
         private Class GetNewInterface(string name, Class @base)
         {
-            var @interface = new Class
-                {
-                    Name = name,
-                    Namespace = @base.Namespace,
-                    Access = @base.Access,
-                    Type = ClassType.Interface,
-                    OriginalClass = @base
-                };
+            var specialization = @base as ClassTemplateSpecialization;
+            Class @interface;
+            if (specialization == null)
+            {
+                @interface = new Class();
+            }
+            else
+            {
+                Class template = specialization.TemplatedDecl.TemplatedClass;
+                Class templatedInterface = GetInterface(template);
+                @interface = interfaces.FirstOrDefault(i => i.OriginalClass == @base);
+                if (@interface != null)
+                    return @interface;
+                var specializedInterface = new ClassTemplateSpecialization();
+                specializedInterface.Arguments.AddRange(specialization.Arguments);
+                specializedInterface.TemplatedDecl = new ClassTemplate { TemplatedDecl = templatedInterface };
+                @interface = specializedInterface;
+            }
+            @interface.Name = name;
+            @interface.USR = @base.USR;
+            @interface.Namespace = @base.Namespace;
+            @interface.Access = @base.Access;
+            @interface.Type = ClassType.Interface;
+            @interface.OriginalClass = @base;
 
             @interface.Bases.AddRange(
                 from b in @base.Bases
@@ -87,7 +103,8 @@ namespace CppSharp.Passes
 
             @interface.Methods.AddRange(
                 from m in @base.Methods
-                where !m.IsConstructor && !m.IsDestructor && !m.IsStatic && m.IsDeclared && !m.IsOperator
+                where !m.IsConstructor && !m.IsDestructor && !m.IsStatic &&
+                    (m.IsGenerated || (m.IsInvalid && specialization != null)) && !m.IsOperator
                 select new Method(m) { Namespace = @interface, OriginalFunction = m });
 
             @interface.Properties.AddRange(
@@ -102,18 +119,29 @@ namespace CppSharp.Passes
             if (@interface.Bases.Count == 0)
             {
                 var instance = new Property
-                {
-                    Namespace = @interface,
-                    Name = Helpers.InstanceIdentifier,
-                    QualifiedType = new QualifiedType(new BuiltinType(PrimitiveType.IntPtr)),
-                    GetMethod = new Method
                     {
-                        SynthKind = FunctionSynthKind.InterfaceInstance,
-                        Namespace = @interface
-                    }
-                };
+                        Namespace = @interface,
+                        Name = Helpers.InstanceIdentifier,
+                        QualifiedType = new QualifiedType(new BuiltinType(PrimitiveType.IntPtr)),
+                        GetMethod = new Method
+                        {
+                            SynthKind = FunctionSynthKind.InterfaceInstance,
+                            Namespace = @interface
+                        }
+                    };
 
                 @interface.Properties.Add(instance);
+
+                var dispose = new Method
+                    {
+                        Namespace = @interface,
+                        Name = "Dispose",
+                        ReturnType = new QualifiedType(new BuiltinType(PrimitiveType.Void)),
+                        SynthKind = FunctionSynthKind.InterfaceDispose,
+                        Mangled = string.Empty
+                    };
+
+                @interface.Methods.Add(dispose);
             }
 
             @interface.Events.AddRange(@base.Events);
@@ -136,7 +164,16 @@ namespace CppSharp.Passes
 
             @base.Bases.Add(new BaseClassSpecifier { Type = new TagType(@interface) });
 
-            interfaces.Add(@base, @interface);
+            interfaces.Add(@interface);
+            if (@base.IsTemplate)
+            {
+                @interface.IsDependent = true;
+                @interface.TemplateParameters.AddRange(@base.TemplateParameters);
+                templatedInterfaces[@base] = @interface;
+                foreach (var spec in @base.Specializations)
+                    @interface.Specializations.Add(
+                        (ClassTemplateSpecialization) GetNewInterface(name, spec));
+            }
             return @interface;
         }
 
@@ -162,13 +199,14 @@ namespace CppSharp.Passes
 
         private void ImplementInterfaceMethods(Class @class, Class @interface)
         {
-            foreach (var method in @interface.Methods)
+            foreach (var method in @interface.Methods.Where(
+                m => m.SynthKind != FunctionSynthKind.InterfaceDispose))
             {
-                var existingImpl = @class.Methods.FirstOrDefault(
+                var existingImpl = @class.Methods.Find(
                     m => m.OriginalName == method.OriginalName &&
-                    m.Parameters.Where(p => !p.Ignore).SequenceEqual(
-                        method.Parameters.Where(p => !p.Ignore),
-                        ParameterTypeComparer.Instance));
+                        m.Parameters.Where(p => !p.Ignore).SequenceEqual(
+                            method.Parameters.Where(p => !p.Ignore),
+                            ParameterTypeComparer.Instance));
                 if (existingImpl != null)
                 {
                     if (existingImpl.OriginalFunction == null)
@@ -181,7 +219,7 @@ namespace CppSharp.Passes
                         OriginalNamespace = @interface,
                         OriginalFunction = method.OriginalFunction
                     };
-                var rootBaseMethod = @class.GetBaseMethod(method, true);
+                var rootBaseMethod = @class.GetBaseMethod(method);
                 if (rootBaseMethod != null && rootBaseMethod.IsDeclared)
                     impl.ExplicitInterfaceImpl = @interface;
                 @class.Methods.Add(impl);
@@ -204,5 +242,7 @@ namespace CppSharp.Passes
             foreach (var @base in @interface.Bases)
                 ImplementInterfaceProperties(@class, @base.Class);
         }
+
+        private readonly Dictionary<Class, Class> templatedInterfaces = new Dictionary<Class, Class>();
     }
 }

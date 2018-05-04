@@ -1,7 +1,9 @@
-﻿using System;
+using System;
 using CppSharp.AST;
 using CppSharp.Utils;
 using CppSharp.Parser;
+using CppSharp.Passes;
+using CppSharp.Generators;
 
 namespace CppSharp.Generator.Tests
 {
@@ -14,27 +16,27 @@ namespace CppSharp.Generator.Tests
 
         protected void ParseLibrary(params string[] files)
         {
-            Options = new DriverOptions();
+            Options = new DriverOptions { GeneratorKind = GeneratorKind.CSharp };
             ParserOptions = new ParserOptions();
 
             var testsPath = GeneratorTest.GetTestsDirectory("Native");
             ParserOptions.AddIncludeDirs(testsPath);
 
-            Options.Headers.AddRange(files);
+            var module = Options.AddModule("Test");
+            module.Headers.AddRange(files);
 
-            Driver = new Driver(Options, new TextDiagnosticPrinter())
+            Driver = new Driver(Options)
             {
                 ParserOptions = this.ParserOptions
             };
 
-            foreach (var module in Driver.Options.Modules)
-                module.LibraryName = "Test";
             Driver.Setup();
-            Driver.BuildParseOptions();
             if (!Driver.ParseCode())
                 throw new Exception("Error parsing the code");
 
             AstContext = Driver.Context.ASTContext;
+            new CleanUnitPass { Context = Driver.Context }.VisitASTContext(AstContext);
+            new ResolveIncompleteDeclsPass { Context = Driver.Context }.VisitASTContext(AstContext);
         }
     }
 }

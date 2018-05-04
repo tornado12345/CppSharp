@@ -3,6 +3,17 @@ using System.Runtime.InteropServices;
 
 namespace CppSharp
 {
+    public enum TargetPlatform
+    {
+        Windows,
+        Linux,
+        Android,
+        MacOS,
+        iOS,
+        WatchOS,
+        TVOS
+    }
+
     public static class Platform
     {
         public static bool IsWindows
@@ -64,6 +75,23 @@ namespace CppSharp
             {
                 var platform = Environment.OSVersion.Platform;
                 return platform == PlatformID.Unix || platform == PlatformID.MacOSX;
+            }
+        }
+
+        public static TargetPlatform Host
+        {
+            get
+            {
+                if (IsWindows)
+                    return TargetPlatform.Windows;
+    
+                if (IsMacOS)
+                    return TargetPlatform.MacOS;
+    
+                if (IsLinux)
+                    return TargetPlatform.Linux;
+    
+                throw new NotImplementedException();
             }
         }
     }

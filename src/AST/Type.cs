@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using CppSharp.AST.Extensions;
 
@@ -8,6 +9,7 @@ namespace CppSharp.AST
     /// <summary>
     /// Represents a C++ type.
     /// </summary>
+    [DebuggerDisplay("{ToString()} [{GetType().Name}]")]
     public abstract class Type : ICloneable
     {
         public static Func<Type, string> TypePrinterDelegate;
@@ -28,7 +30,7 @@ namespace CppSharp.AST
 
         public string ToNativeString()
         {
-            var cppTypePrinter = new CppTypePrinter { PrintScopeKind = CppTypePrintScopeKind.Qualified };
+            var cppTypePrinter = new CppTypePrinter { PrintScopeKind = TypePrintScopeKind.Qualified };
             return Visit(cppTypePrinter);
         }
 
@@ -222,6 +224,19 @@ namespace CppSharp.AST
         }
     }
 
+    public enum ExceptionSpecType
+    {
+        None,
+        DynamicNone,
+        Dynamic,
+        MSAny,
+        BasicNoexcept,
+        ComputedNoexcept,
+        Unevaluated,
+        Uninstantiated,
+        Unparsed
+    }
+
     /// <summary>
     /// Represents an C/C++ function type.
     /// </summary>
@@ -231,21 +246,23 @@ namespace CppSharp.AST
         public QualifiedType ReturnType;
 
         // Argument types.
-        public List<Parameter> Parameters;
+        public List<Parameter> Parameters { get; } = new List<Parameter>();
 
         public CallingConvention CallingConvention { get; set; }
 
+        public ExceptionSpecType ExceptionSpecType { get; set; }
+
         public FunctionType()
         {
-            Parameters = new List<Parameter>();
         }
 
         public FunctionType(FunctionType type)
             : base(type)
         {
             ReturnType = new QualifiedType((Type) type.ReturnType.Type.Clone(), type.ReturnType.Qualifiers);
-            Parameters = type.Parameters.Select(p => new Parameter(p)).ToList();
+            Parameters.AddRange(type.Parameters.Select(p => new Parameter(p)));
             CallingConvention = type.CallingConvention;
+            IsDependent = type.IsDependent;
         }
 
         public override T Visit<T>(ITypeVisitor<T> visitor, TypeQualifiers quals = new TypeQualifiers())
@@ -651,7 +668,9 @@ namespace CppSharp.AST
                     Type = new QualifiedType((Type) t.Type.Type.Clone(), t.Type.Qualifiers)
                 }).ToList();
             Template = type.Template;
-            Desugared = new QualifiedType((Type) type.Desugared.Type.Clone(), type.Desugared.Qualifiers);
+            if (type.Desugared.Type != null)
+                Desugared = new QualifiedType((Type) type.Desugared.Type.Clone(),
+                    type.Desugared.Qualifiers);
         }
 
         public List<TemplateArgument> Arguments;
@@ -700,7 +719,7 @@ namespace CppSharp.AST
 
             return Arguments.SequenceEqual(type.Arguments) &&
                 ((Template != null && Template.Name == type.Template.Name) ||
-                Desugared == type.Desugared);
+                (Desugared.Type != null && Desugared == type.Desugared));
         }
 
         public override int GetHashCode()
@@ -780,11 +799,12 @@ namespace CppSharp.AST
         public TemplateParameterType(TemplateParameterType type)
             : base(type)
         {
-            Parameter = new TypeTemplateParameter
-            {
-                Constraint = type.Parameter.Constraint,
-                Name = type.Parameter.Name
-            };
+            if (type.Parameter != null)
+                Parameter = new TypeTemplateParameter
+                {
+                    Constraint = type.Parameter.Constraint,
+                    Name = type.Parameter.Name
+                };
             Depth = type.Depth;
             Index = type.Index;
             IsParameterPack = type.IsParameterPack;
@@ -806,10 +826,10 @@ namespace CppSharp.AST
             var type = obj as TemplateParameterType;
             if (type == null) return false;
 
-            return Parameter.Equals(type.Parameter)
-                && Depth.Equals(type.Depth)
-                && Index.Equals(type.Index)
-                && IsParameterPack.Equals(type.IsParameterPack);
+            return Parameter == type.Parameter
+                && Depth == type.Depth
+                && Index == type.Index
+                && IsParameterPack == type.IsParameterPack;
         }
 
         public override int GetHashCode()
@@ -825,6 +845,8 @@ namespace CppSharp.AST
     {
         public QualifiedType Replacement;
 
+        public TemplateParameterType ReplacedParameter { get; set; }
+
         public TemplateParameterSubstitutionType()
         {
         }
@@ -833,6 +855,7 @@ namespace CppSharp.AST
             : base(type)
         {
             Replacement = new QualifiedType((Type) type.Replacement.Type.Clone(), type.Replacement.Qualifiers);
+            ReplacedParameter = (TemplateParameterType) type.ReplacedParameter.Clone();
         }
 
         public override T Visit<T>(ITypeVisitor<T> visitor,
@@ -876,7 +899,11 @@ namespace CppSharp.AST
         public InjectedClassNameType(InjectedClassNameType type)
             : base(type)
         {
-            TemplateSpecialization = (TemplateSpecializationType) type.TemplateSpecialization.Clone();
+            if (type.TemplateSpecialization != null)
+                TemplateSpecialization = (TemplateSpecializationType) type.TemplateSpecialization.Clone();
+            InjectedSpecializationType = new QualifiedType(
+                (Type) type.InjectedSpecializationType.Type.Clone(),
+                type.InjectedSpecializationType.Qualifiers);
             Class = type.Class;
         }
 
@@ -924,7 +951,9 @@ namespace CppSharp.AST
         {
         }
 
-        public QualifiedType Desugared { get; set; }
+        public QualifiedType Qualifier { get; set; }
+
+        public string Identifier { get; set; }
 
         public override T Visit<T>(ITypeVisitor<T> visitor,
                                    TypeQualifiers quals = new TypeQualifiers())
@@ -1065,6 +1094,11 @@ namespace CppSharp.AST
         {
         }
 
+        public UnsupportedType(string description)
+        {
+            Description = description;
+        }
+
         public UnsupportedType(UnsupportedType type)
             : base(type)
         {
@@ -1095,6 +1129,7 @@ namespace CppSharp.AST
         Bool,
         WideChar,
         Char,
+        SChar,
         UChar,
         Char16,
         Char32,
@@ -1115,6 +1150,8 @@ namespace CppSharp.AST
         Float128,
         IntPtr,
         UIntPtr,
+        String,
+        Decimal
     }
 
     /// <summary>

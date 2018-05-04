@@ -2,12 +2,12 @@
 
 namespace CppSharp.Generators
 {
-    public class MarshalContext
+    public class MarshalContext : TypePrinter
     {
         public MarshalContext(BindingContext context)
         {
             Context = context;
-            SupportBefore = new TextGenerator();
+            Before = new TextGenerator();
             Return = new TextGenerator();
             MarshalVarPrefix = string.Empty;
         }
@@ -16,16 +16,13 @@ namespace CppSharp.Generators
 
         public MarshalPrinter<MarshalContext> MarshalToNative;
 
-        public TextGenerator SupportBefore { get; private set; }
+        public TextGenerator Before { get; private set; }
         public TextGenerator Return { get; private set; }
-
-        public Declaration Declaration { get; set; }
 
         public string ReturnVarName { get; set; }
         public QualifiedType ReturnType { get; set; }
 
         public string ArgName { get; set; }
-        public Parameter Parameter { get; set; }
         public int ParameterIndex { get; set; }
         public Function Function { get; set; }
 

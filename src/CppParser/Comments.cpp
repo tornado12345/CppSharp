@@ -38,11 +38,11 @@ RawComment* Parser::WalkRawComment(const clang::RawComment* RC)
 {
     using namespace clang;
 
-    auto& SM = C->getSourceManager();
+    auto& SM = c->getSourceManager();
     auto Comment = new RawComment();
-    Comment->Kind = ConvertRawCommentKind(RC->getKind());
-    Comment->Text = RC->getRawText(SM);
-    Comment->BriefText = RC->getBriefText(*AST);
+    Comment->kind = ConvertRawCommentKind(RC->getKind());
+    Comment->text = RC->getRawText(SM);
+    Comment->briefText = RC->getBriefText(c->getASTContext());
 
     return Comment;
 }
@@ -84,17 +84,17 @@ ConvertParamPassDirection(clang::comments::ParamCommandComment::PassDirection Di
 static void HandleInlineContent(const clang::comments::InlineContentComment *CK,
     InlineContentComment* IC)
 {
-    IC->HasTrailingNewline = CK->hasTrailingNewline();
+    IC->hasTrailingNewline = CK->hasTrailingNewline();
 }
 
 static void HandleBlockCommand(const clang::comments::BlockCommandComment *CK,
                                BlockCommandComment* BC)
 {
-    BC->CommandId = CK->getCommandID();
+    BC->commandId = CK->getCommandID();
     for (unsigned I = 0, E = CK->getNumArgs(); I != E; ++I)
     {
         auto Arg = BlockCommandComment::Argument();
-        Arg.Text = CK->getArgText(I);
+        Arg.text = CK->getArgText(I);
         BC->Arguments.push_back(Arg);
     }
 }
@@ -127,7 +127,7 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto BC = new BlockCommandComment();
         _Comment = BC;
         HandleBlockCommand(CK, BC);
-        BC->ParagraphComment = static_cast<ParagraphComment*>(ConvertCommentBlock(CK->getParagraph()));
+        BC->paragraphComment = static_cast<ParagraphComment*>(ConvertCommentBlock(CK->getParagraph()));
         break;
     }
     case Comment::ParamCommandCommentKind:
@@ -136,10 +136,10 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto PC = new ParamCommandComment();
         _Comment = PC;
         HandleBlockCommand(CK, PC);
-        PC->Direction = ConvertParamPassDirection(CK->getDirection());
+        PC->direction = ConvertParamPassDirection(CK->getDirection());
         if (CK->isParamIndexValid() && !CK->isVarArgParam())
-            PC->ParamIndex = CK->getParamIndex();
-        PC->ParagraphComment = static_cast<ParagraphComment*>(ConvertCommentBlock(CK->getParagraph()));
+            PC->paramIndex = CK->getParamIndex();
+        PC->paragraphComment = static_cast<ParagraphComment*>(ConvertCommentBlock(CK->getParagraph()));
         break;
     }
     case Comment::TParamCommandCommentKind:
@@ -152,7 +152,7 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         if (CK->isPositionValid())
             for (unsigned I = 0, E = CK->getDepth(); I != E; ++I)
                 TC->Position.push_back(CK->getIndex(I));
-        TC->ParagraphComment = static_cast<ParagraphComment*>(ConvertCommentBlock(CK->getParagraph()));
+        TC->paragraphComment = static_cast<ParagraphComment*>(ConvertCommentBlock(CK->getParagraph()));
         break;
     }
     case Comment::VerbatimBlockCommentKind:
@@ -172,7 +172,7 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto CK = cast<clang::comments::VerbatimLineComment>(C);
         auto VL = new VerbatimLineComment();
         _Comment = VL;
-        VL->Text = CK->getText();
+        VL->text = CK->getText();
         break;
     }
     case Comment::ParagraphCommentKind:
@@ -185,7 +185,7 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
             auto Content = ConvertCommentBlock(*I);
             PC->Content.push_back(static_cast<InlineContentComment*>(Content));
         }
-        PC->IsWhitespace = CK->isWhitespace();
+        PC->isWhitespace = CK->isWhitespace();
         break;
     }
     case Comment::HTMLStartTagCommentKind:
@@ -194,13 +194,13 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto TC = new HTMLStartTagComment();
         _Comment = TC;
         HandleInlineContent(CK, TC);
-        TC->TagName = CK->getTagName();
+        TC->tagName = CK->getTagName();
         for (unsigned I = 0, E = CK->getNumAttrs(); I != E; ++I)
         {
             auto A = CK->getAttr(I);
             auto Attr = HTMLStartTagComment::Attribute();
-            Attr.Name = A.Name;
-            Attr.Value = A.Value;
+            Attr.name = A.Name;
+            Attr.value = A.Value;
             TC->Attributes.push_back(Attr);
         }
         break;
@@ -211,7 +211,7 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto TC = new HTMLEndTagComment();
         _Comment = TC;
         HandleInlineContent(CK, TC);
-        TC->TagName = CK->getTagName();
+        TC->tagName = CK->getTagName();
         break;
     }
     case Comment::TextCommentKind:
@@ -220,7 +220,7 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto TC = new TextComment();
         _Comment = TC;
         HandleInlineContent(CK, TC);
-        TC->Text = CK->getText();
+        TC->text = CK->getText();
         break;
     }
     case Comment::InlineCommandCommentKind:
@@ -229,12 +229,12 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto IC = new InlineCommandComment();
         _Comment = IC;
         HandleInlineContent(CK, IC);
-        IC->CommandId = CK->getCommandID();
-        IC->CommentRenderKind = ConvertRenderKind(CK->getRenderKind());
+        IC->commandId = CK->getCommandID();
+        IC->commentRenderKind = ConvertRenderKind(CK->getRenderKind());
         for (unsigned I = 0, E = CK->getNumArgs(); I != E; ++I)
         {
             auto Arg = InlineCommandComment::Argument();
-            Arg.Text = CK->getArgText(I);
+            Arg.text = CK->getArgText(I);
             IC->Arguments.push_back(Arg);
         }       
         break;
@@ -244,7 +244,7 @@ static Comment* ConvertCommentBlock(clang::comments::Comment* C)
         auto CK = cast<clang::comments::VerbatimBlockLineComment>(C);
         auto VL = new VerbatimBlockLineComment();
         _Comment = VL;
-        VL->Text = CK->getText();
+        VL->text = CK->getText();
         break;
     }
     case Comment::NoCommentKind: return nullptr;
@@ -261,15 +261,15 @@ void Parser::HandleComments(const clang::Decl* D, Declaration* Decl)
     using namespace clang;
 
     const clang::RawComment* RC = 0;
-    if (!(RC = AST->getRawCommentForAnyRedecl(D)))
+    if (!(RC = c->getASTContext().getRawCommentForAnyRedecl(D)))
         return;
 
     auto RawComment = WalkRawComment(RC);
-    Decl->Comment = RawComment;
+    Decl->comment = RawComment;
 
-    if (clang::comments::FullComment* FC = RC->parse(*AST, &C->getPreprocessor(), D))
+    if (clang::comments::FullComment* FC = RC->parse(c->getASTContext(), &c->getPreprocessor(), D))
     {
         auto CB = static_cast<FullComment*>(ConvertCommentBlock(FC));
-        RawComment->FullCommentBlock = CB;
+        RawComment->fullCommentBlock = CB;
     }
 }

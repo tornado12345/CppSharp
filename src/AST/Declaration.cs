@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace CppSharp.AST
@@ -12,7 +13,7 @@ namespace CppSharp.AST
     public interface ITypedDecl
     {
         Type Type { get; }
-        QualifiedType QualifiedType { get; }
+        QualifiedType QualifiedType { get; set; }
     }
 
     public interface INamedDecl
@@ -47,6 +48,7 @@ namespace CppSharp.AST
     /// <summary>
     /// Represents a C++ declaration.
     /// </summary>
+    [DebuggerDisplay("{ToString()} [{GetType().Name}]")]
     public abstract class Declaration : INamedDecl
     {
         public SourceLocation Location;
@@ -54,6 +56,7 @@ namespace CppSharp.AST
         public int LineNumberStart { get; set; }
         public int LineNumberEnd { get; set; }
         public bool IsImplicit { get; set; }
+        public int MaxFieldAlignment { get; set; }
 
         private DeclarationContext @namespace;
         public DeclarationContext OriginalNamespace;
@@ -128,7 +131,6 @@ namespace CppSharp.AST
                 return getName(this);
 
             var namespaces = GatherNamespaces(getNamespace(this));
-            namespaces.Reverse();
 
             var names = namespaces.Select(getName).ToList();
             names.Add(getName(this));
@@ -137,14 +139,17 @@ namespace CppSharp.AST
             return string.Join(QualifiedNameSeparator, names);
         }
 
-        public static List<Declaration> GatherNamespaces(DeclarationContext @namespace)
+        public static IEnumerable<Declaration> GatherNamespaces(DeclarationContext @namespace)
         {
-            var namespaces = new List<Declaration>();
+            var namespaces = new Stack<Declaration>();
 
             var currentNamespace = @namespace;
             while (currentNamespace != null)
             {
-                namespaces.Add(currentNamespace);
+                var isInlineNamespace = currentNamespace is Namespace &&
+                    ((Namespace) currentNamespace).IsInline;
+                if (!isInlineNamespace)
+                    namespaces.Push(currentNamespace);
                 currentNamespace = currentNamespace.Namespace;
             }
 
@@ -196,8 +201,12 @@ namespace CppSharp.AST
             return name;
         }
 
+        public Declaration AssociatedDeclaration { get; set; }
+
         // Comment associated with declaration.
         public RawComment Comment;
+
+        public bool IsInvalid { get; set; }
 
         private GenerationKind? generationKind;
 
@@ -318,6 +327,8 @@ namespace CppSharp.AST
 
         public List<Attribute> Attributes { get; private set; }
 
+        public List<Declaration> Redeclarations { get; } = new List<Declaration>();
+
         protected Declaration()
         {
             Access = AccessSpecifier.Public;
@@ -355,6 +366,7 @@ namespace CppSharp.AST
             LineNumberStart = declaration.LineNumberStart;
             LineNumberEnd = declaration.LineNumberEnd;
             IsImplicit = declaration.IsImplicit;
+            AssociatedDeclaration = declaration.AssociatedDeclaration;
         }
 
         public override string ToString()
@@ -368,11 +380,13 @@ namespace CppSharp.AST
     public interface IDeclVisitor<out T>
     {
         T VisitDeclaration(Declaration decl);
+        T VisitTranslationUnit(TranslationUnit unit);
         T VisitClassDecl(Class @class);
         T VisitFieldDecl(Field field);
         T VisitFunctionDecl(Function function);
         T VisitMethodDecl(Method method);
         T VisitParameterDecl(Parameter parameter);
+        T VisitTypedefNameDecl(TypedefNameDecl typedef);
         T VisitTypedefDecl(TypedefDecl typedef);
         T VisitTypeAliasDecl(TypeAlias typeAlias);
         T VisitEnumDecl(Enumeration @enum);

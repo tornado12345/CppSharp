@@ -35,7 +35,7 @@ namespace CppSharp.Passes
             // This means we can change the function to be an instance method.
 
             // Clean up the name of the function now that it will be an instance method.
-            if (!function.Name.StartsWith(@class.Name))
+            if (!function.Name.StartsWith(@class.Name, System.StringComparison.Ordinal))
                 return false;
 
             function.Name = function.Name.Substring(@class.Name.Length);
@@ -52,15 +52,18 @@ namespace CppSharp.Passes
                     Access = AccessSpecifier.Public,
                     Kind = CXXMethodKind.Normal,
                     ReturnType = function.ReturnType,
-                    Parameters = function.Parameters,
                     CallingConvention = function.CallingConvention,
                     IsVariadic = function.IsVariadic,
                     IsInline = function.IsInline,
-                    Conversion = MethodConversionKind.FunctionToInstanceMethod
+                    Conversion = MethodConversionKind.FunctionToInstanceMethod,
+                    FunctionType = function.FunctionType
                 };
 
+            method.Parameters.AddRange(function.Parameters.Select(
+                p => new Parameter(p) { Namespace = method }));
+
             if (Options.GeneratorKind == GeneratorKind.CSharp)
-                method.Parameters = method.Parameters.Skip(1).ToList();
+                method.Parameters.RemoveAt(0);
 
             @class.Methods.Add(method);
 

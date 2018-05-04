@@ -1,6 +1,5 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using CppSharp.AST;
 
@@ -15,7 +14,9 @@ namespace CppSharp.Generators
         CSharp = 2,
         C,
         CPlusPlus,
-        ObjectiveC
+        ObjectiveC,
+        Java,
+        Swift
     }
 
     /// <summary>
@@ -29,9 +30,9 @@ namespace CppSharp.Generators
         public TranslationUnit TranslationUnit;
 
         /// <summary>
-        /// Text templates with generated output.
+        /// Code generators with generated output.
         /// </summary>
-        public List<Template> Templates;
+        public List<CodeGenerator> Outputs;
     }
 
     /// <summary>
@@ -39,9 +40,7 @@ namespace CppSharp.Generators
     /// </summary>
     public abstract class Generator : IDisposable
     {
-        public static string CurrentOutputNamespace = string.Empty;
-
-        public BindingContext Context { get; private set; }
+        public BindingContext Context { get; }
 
         protected Generator(BindingContext context)
         {
@@ -76,7 +75,8 @@ namespace CppSharp.Generators
 
             var units = Context.ASTContext.TranslationUnits.GetGenerated().ToList();
 
-            if (Context.Options.IsCSharpGenerator)
+            if (Context.Options.IsCSharpGenerator &&
+                Context.Options.GenerateSingleCSharpFile)
                 GenerateSingleTemplate(outputs);
             else
                 GenerateTemplates(outputs, units.Where(u => !u.IsSystemHeader));
@@ -88,12 +88,10 @@ namespace CppSharp.Generators
         {
             foreach (var unit in units)
             {
-                var includeDir = Path.GetDirectoryName(unit.FilePath);
                 var templates = Generate(new[] { unit });
                 if (templates.Count == 0)
                     return;
 
-                CurrentOutputNamespace = unit.Module.OutputNamespace;
                 foreach (var template in templates)
                 {
                     template.Process();
@@ -102,7 +100,7 @@ namespace CppSharp.Generators
                 var output = new GeneratorOutput
                 {
                     TranslationUnit = unit,
-                    Templates = templates
+                    Outputs = templates
                 };
 
                 outputs.Add(output);
@@ -115,17 +113,16 @@ namespace CppSharp.Generators
         {
             foreach (var module in Context.Options.Modules)
             {
-                CurrentOutputNamespace = module.OutputNamespace;
                 var output = new GeneratorOutput
                 {
                     TranslationUnit = new TranslationUnit
                     {
-                        FilePath = string.Format("{0}.cs", module.LibraryName),
+                        FilePath = $"{module.LibraryName}.cs",
                         Module = module
                     },
-                    Templates = Generate(module.Units.GetGenerated())
+                    Outputs = Generate(module.Units.GetGenerated())
                 };
-                output.Templates[0].Process();
+                output.Outputs[0].Process();
                 outputs.Add(output);
 
                 OnUnitGenerated(output);
@@ -133,9 +130,10 @@ namespace CppSharp.Generators
         }
 
         /// <summary>
-        /// Generates the outputs for a given translation unit.
+        /// Generates the outputs for the given translation units.
         /// </summary>
-        public abstract List<Template> Generate(IEnumerable<TranslationUnit> units);
+        /// <param name="units">The units to generate outputs for.</param>
+        public abstract List<CodeGenerator> Generate(IEnumerable<TranslationUnit> units);
 
         protected abstract string TypePrinterDelegate(CppSharp.AST.Type type);
 

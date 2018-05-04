@@ -1,5 +1,40 @@
 -- This module checks for the all the project dependencies.
 
+newoption {
+   trigger     = "arch",
+   description = "Choose a particular architecture / bitness",
+   allowed = {
+      { "x86",  "x86 32-bits" },
+      { "x64",  "x64 64-bits" },
+   }
+}
+
+newoption {
+   trigger     = "no-cxx11-abi",
+   description = "disable cxx11 abi on gcc 4.9+"
+}
+
+explicit_target_architecture = _OPTIONS["arch"]
+
+function is_64_bits_mono_runtime()
+  result, errorcode = os.outputof("mono --version")
+  local arch = string.match(result, "Architecture:%s*([%w]+)")
+  return arch == "amd64"
+end
+
+function target_architecture()
+  -- Default to 32-bit on Windows and Mono architecture otherwise.
+  if explicit_target_architecture ~= nil then
+    return explicit_target_architecture
+  end
+  if os.ishost("windows") then return "x86" end
+  return is_64_bits_mono_runtime() and "x64" or "x86"
+end
+
+if not _OPTIONS["arch"] then
+  _OPTIONS["arch"] = target_architecture()
+end
+
 action = _ACTION or ""
 
 basedir = path.getdirectory(_PREMAKE_COMMAND)
@@ -23,6 +58,8 @@ msvc_buildflags = { "/wd4267" }
 
 msvc_cpp_defines = { }
 
+generate_build_config = true
+
 function string.starts(str, start)
    return string.sub(str, 1, string.len(start)) == start
 end
@@ -34,21 +71,22 @@ end
 function SetupNativeProject()
   location ("%{wks.location}/projects")
 
-  local c = configuration "Debug"
+  filter { "configurations:Debug" }
     defines { "DEBUG" }
     
-  configuration "Release"
+  filter { "configurations:Release" }
     defines { "NDEBUG" }
     optimize "On"
     
   -- Compiler-specific options
   
-  configuration "vs*"
+  filter { "action:vs*" }
     buildoptions { msvc_buildflags }
     defines { msvc_cpp_defines }
 
-  configuration { "gmake" }
+  filter { "system:linux" }
     buildoptions { gcc_buildflags }
+    links { "stdc++" }
 
   filter { "system:macosx", "language:C++" }
     buildoptions { gcc_buildflags, "-stdlib=libc++" }
@@ -59,36 +97,38 @@ function SetupNativeProject()
   
   -- OS-specific options
   
-  configuration "Windows"
+  filter { "system:windows" }
     defines { "WIN32", "_WINDOWS" }
   
-  configuration(c)
+  filter {}
+
+  if os.istarget("linux") then
+    if not UseCxx11ABI() then
+      defines { "_GLIBCXX_USE_CXX11_ABI=0" }
+    end
+  end
 end
 
 function SetupManagedProject()
   language "C#"
   location ("%{wks.location}/projects")
+  buildoptions {"/platform:".._OPTIONS["arch"]}
 
-  if not os.is("macosx") then
-    local c = configuration { "vs*" }
+  dotnetframework "4.6"
+
+  if not os.istarget("macosx") then
+    filter { "action:vs*" }
       location "."
-    configuration(c)
+    filter {}
   end
 
-  if action == "vs2015" then
+  filter { "action:vs2013" }
+    dotnetframework "4.5"
 
-  configuration "vs2015"
-    framework "4.6"
+  filter { "action:vs2012" }
+    dotnetframework "4.5"
 
-  end
-
-  configuration "vs2013"
-    framework "4.5"
-
-  configuration "vs2012"
-    framework "4.5"
-
-  configuration {}
+  filter {}
 end
 
 function IncludeDir(dir)
@@ -114,7 +154,6 @@ function IncludeDir(dir)
 end
 
 function StaticLinksOpt(libnames)
-  local cc = configuration()
   local path = table.concat(cc.configset.libdirs, ";")
 
   local formats
@@ -136,4 +175,21 @@ function StaticLinksOpt(libnames)
   end
 
   links(existing_libnames)
+end
+
+function GccVersion()
+  local compiler = os.getenv("CXX")
+  if compiler == nil then
+    compiler = "gcc"
+  end
+  local out = os.outputof(compiler.." -v")
+  local version = string.match(out, "gcc version [0-9\\.]+")
+  return string.sub(version, 13)
+end
+
+function UseCxx11ABI()
+  if os.istarget("linux") and GccVersion() >= '4.9.0' and _OPTIONS["no-cxx11-abi"] == nil then
+    return true
+  end
+  return false
 end

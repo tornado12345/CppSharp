@@ -15,41 +15,13 @@ namespace CppSharp { namespace CppParser {
 
 using namespace CppSharp::CppParser::AST;
 
-enum class LanguageVersion
-{
-    /**
-    * The C programming language.
-    */
-    C,
-    /**
-    * The C programming language (GNU version).
-    */
-    GNUC,
-    /**
-    * The C++ programming language year 1998; supports deprecated constructs.
-    */
-    CPlusPlus98,
-    /**
-    * The C++ programming language year 1998; supports deprecated constructs (GNU version).
-    */
-    GNUPlusPlus98,
-    /**
-    * The C++ programming language year 2011.
-    */
-    CPlusPlus11,
-    /**
-    * The C++ programming language year 2011 (GNU version).
-    */
-    GNUPlusPlus11
-};
-
 struct CS_API CppParserOptions
 {
     CppParserOptions();
+    ~CppParserOptions();
 
     VECTOR_STRING(Arguments)
-
-    STRING(LibraryFile)
+    std::string libraryFile;
     // C/C++ header file names.
     VECTOR_STRING(SourceFiles)
 
@@ -59,20 +31,20 @@ struct CS_API CppParserOptions
     VECTOR_STRING(Defines)
     VECTOR_STRING(Undefines)
     VECTOR_STRING(LibraryDirs)
+    VECTOR_STRING(SupportedStdTypes)
 
     CppSharp::CppParser::AST::ASTContext* ASTContext;
 
-    int ToolSetToUse;
-    STRING(TargetTriple)
-    CppAbi Abi;
+    int toolSetToUse;
+    std::string targetTriple;
+    std::string currentDir;
+    CppAbi abi;
 
-    bool NoStandardIncludes;
-    bool NoBuiltinIncludes;
-    bool MicrosoftMode;
-    bool Verbose;
-    LanguageVersion LanguageVersion;
-
-    ParserTargetInfo* TargetInfo;
+    bool noStandardIncludes;
+    bool noBuiltinIncludes;
+    bool microsoftMode;
+    bool verbose;
+    bool unityBuild;
 };
 
 enum class ParserDiagnosticLevel
@@ -88,12 +60,11 @@ struct CS_API ParserDiagnostic
 {
     ParserDiagnostic();
     ParserDiagnostic(const ParserDiagnostic&);
-
-    STRING(FileName)
-    STRING(Message)
-    ParserDiagnosticLevel Level;
-    int LineNumber;
-    int ColumnNumber;
+    std::string fileName;
+    std::string message;
+    ParserDiagnosticLevel level;
+    int lineNumber;
+    int columnNumber;
 };
 
 enum class ParserResultKind
@@ -111,12 +82,12 @@ struct CS_API ParserResult
     ParserResult(const ParserResult&);
     ~ParserResult();
 
-    ParserResultKind Kind;
+    ParserResultKind kind;
     VECTOR(ParserDiagnostic, Diagnostics)
 
-    CppSharp::CppParser::AST::ASTContext* ASTContext;
-    CppSharp::CppParser::AST::NativeLibrary* Library;
-    Parser* CodeParser;
+    NativeLibrary* library;
+    ParserTargetInfo* targetInfo;
+    Parser* codeParser;
 };
 
 enum class SourceLocationKind
@@ -134,7 +105,6 @@ public:
 
     static ParserResult* ParseHeader(CppParserOptions* Opts);
     static ParserResult* ParseLibrary(CppParserOptions* Opts);
-    static ParserTargetInfo* GetTargetInfo(CppParserOptions* Opts);
 };
 
 } }

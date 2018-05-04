@@ -32,7 +32,7 @@
 
         public static bool IsEnumType(this Type t)
         {
-            var tag = t as TagType;
+            var tag = t.Desugar() as TagType;
             
             if (tag == null)
                 return false;
@@ -111,12 +111,12 @@
             return t.TryGetClass(out @class);
         }
 
-        public static bool TryGetClass(this Type t, out Class @class)
+        public static bool TryGetClass(this Type t, out Class @class, Class value = null)
         {
-            return TryGetDeclaration(t, out @class);
+            return TryGetDeclaration(t, out @class, value);
         }
 
-        public static bool TryGetDeclaration<T>(this Type t, out T decl) where T : Declaration
+        public static bool TryGetDeclaration<T>(this Type t, out T decl, T value = null) where T : Declaration
         {
             t = t.Desugar();
 
@@ -128,9 +128,8 @@
                 {
                     if (type.Template is TypeAliasTemplate)
                     {
-                        Class @class;
-                        type.Desugared.Type.TryGetClass(out @class);
-                        decl = @class as T;
+                        type.Desugared.Type.TryGetDeclaration(out decl, value);
+                        decl = decl as T;
                         return decl != null;
                     }
 
@@ -141,14 +140,20 @@
                         decl = templatedClass.CompleteDeclaration == null
                             ? templatedClass as T
                             : (T) templatedClass.CompleteDeclaration;
-                        return decl != null;
+                        if (decl != null)
+                        {
+                            if (value != null)
+                                type.Template = new ClassTemplate { TemplatedDecl = value };
+                            return true;
+                        }
+                        return false;
                     }
 
                     var templateTemplateParameter = type.Template as TemplateTemplateParameter;
                     if (templateTemplateParameter != null)
                         return (decl = templateTemplateParameter.TemplatedDecl as T) != null;
                 }
-                tagType = (TagType) (type.Desugared.Type.GetFinalPointee() ?? type.Desugared.Type);
+                tagType = (type.Desugared.Type.GetFinalPointee() ?? type.Desugared.Type) as TagType;
             }
             else
             {
@@ -158,7 +163,13 @@
             if (tagType != null)
             {
                 decl = tagType.Declaration as T;
-                return decl != null;
+                if (decl != null)
+                {
+                    if (value != null)
+                        tagType.Declaration = value;
+                    return true;
+                }
+                return false;
             }
 
             decl = null;
@@ -185,27 +196,39 @@
             return @enum != null;
         }
 
-        public static Type Desugar(this Type t)
+        public static Type Desugar(this Type t, bool resolveTemplateSubstitution = true)
         {
             var typeDef = t as TypedefType;
             if (typeDef != null)
             {
                 var decl = typeDef.Declaration.Type;
                 if (decl != null)
-                    return decl.Desugar();
+                    return decl.Desugar(resolveTemplateSubstitution);
             }
 
-            var substType = t as TemplateParameterSubstitutionType;
-            if (substType != null)
+            if (resolveTemplateSubstitution)
             {
-                var replacement = substType.Replacement.Type;
-                if (replacement != null)
-                    return replacement.Desugar();
+                var substType = t as TemplateParameterSubstitutionType;
+                if (substType != null)
+                {
+                    var replacement = substType.Replacement.Type;
+                    if (replacement != null)
+                        return replacement.Desugar(resolveTemplateSubstitution);
+                }
+            }
+
+            var injectedType = t as InjectedClassNameType;
+            if (injectedType != null)
+            {
+                if (injectedType.InjectedSpecializationType.Type != null)
+                    return injectedType.InjectedSpecializationType.Type.Desugar(
+                        resolveTemplateSubstitution);
+                return new TagType(injectedType.Class);
             }
 
             var attributedType = t as AttributedType;
             if (attributedType != null)
-                return attributedType.Equivalent.Type.Desugar();
+                return attributedType.Equivalent.Type.Desugar(resolveTemplateSubstitution);
 
             return t;
         }
@@ -321,6 +344,69 @@
                     leftPointer.QualifiedPointee.ResolvesTo(rightPointer.QualifiedPointee);
             }
             return left.Equals(right);
+        }
+
+        public static bool IsConstRefToPrimitive(this QualifiedType type)
+        {
+            Type desugared = type.Type.Desugar();
+            return desugared.IsReference() &&
+                desugared.GetFinalPointee().Desugar().IsPrimitiveType() && type.IsConst();
+        }
+
+        private static bool IsConst(this QualifiedType type)
+        {
+            return type.Type != null && (type.Qualifiers.IsConst ||
+                type.Type.GetQualifiedPointee().IsConst());
+        }
+
+        public static bool IsConstCharString(this Type type)
+        {
+            var desugared = type.Desugar();
+
+            if (!(desugared is PointerType))
+                return false;
+
+            var pointer = desugared as PointerType;
+            return IsConstCharString(pointer);
+        }
+
+        public static bool IsConstCharString(this PointerType pointer)
+        {
+            if (pointer.IsReference)
+                return false;
+
+            var pointee = pointer.Pointee.Desugar();
+
+            return (pointee.IsPrimitiveType(PrimitiveType.Char) ||
+                    pointee.IsPrimitiveType(PrimitiveType.Char16) ||
+                    pointee.IsPrimitiveType(PrimitiveType.WideChar)) &&
+                    pointer.QualifiedPointee.Qualifiers.IsConst;
+        }
+
+        public static bool IsDependentPointer(this Type type)
+        {
+            var desugared = type.Desugar();
+            if (desugared.IsAddress())
+            {
+                var pointee = desugared.GetFinalPointee().Desugar();
+                return pointee.IsDependent
+                    && !(pointee is TemplateSpecializationType)
+                    && !(pointee is InjectedClassNameType);
+            }
+            return false;
+        }
+
+        public static Module GetModule(this Type type)
+        {
+            Declaration declaration;
+            if (!(type.GetFinalPointee() ?? type).TryGetDeclaration(out declaration))
+                return null;
+
+            declaration = declaration.CompleteDeclaration ?? declaration;
+            if (declaration.Namespace == null || declaration.TranslationUnit.Module == null)
+                return null;
+
+            return declaration.TranslationUnit.Module;
         }
     }
 }

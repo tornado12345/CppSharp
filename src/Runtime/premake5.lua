@@ -6,10 +6,12 @@ project "CppSharp.Runtime"
   clr "Unsafe"
 
   files   { "**.cs" }
+  vpaths { ["*"] = "*" }
+ 
   links { "System" }
 
-  configuration "vs*"
+  filter { "action:vs*" }
   	defines { "MSVC" }
 
-  configuration "macosx"
+  filter { "system:macosx" }
   	defines { "LIBCXX" }

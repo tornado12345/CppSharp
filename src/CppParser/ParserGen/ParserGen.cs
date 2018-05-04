@@ -1,13 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using CppSharp.AST;
 using CppSharp.Generators;
-using CppSharp.Passes;
-using CppSharp.Types;
-using CppAbi = CppSharp.Parser.AST.CppAbi;
 using CppSharp.Parser;
+using CppSharp.Passes;
+using CppAbi = CppSharp.Parser.AST.CppAbi;
 
 namespace CppSharp
 {
@@ -39,7 +38,7 @@ namespace CppSharp
                 var path = Path.Combine(directory.FullName, dir);
 
                 if (Directory.Exists(path) &&
-                    Directory.Exists(Path.Combine(directory.FullName, "patches")))
+                    Directory.Exists(Path.Combine(directory.FullName, "deps")))
                     return path;
 
                 directory = directory.Parent;
@@ -55,16 +54,16 @@ namespace CppSharp
             parserOptions.Abi = Abi;
 
             var options = driver.Options;
-            options.LibraryName = "CppSharp.CppParser";
-            options.SharedLibraryName = "CppSharp.CppParser.dll";
             options.GeneratorKind = Kind;
-            options.Headers.AddRange(new[]
+            options.CommentKind = CommentKind.BCPLSlash;
+            var parserModule = options.AddModule("CppSharp.CppParser");
+            parserModule.Headers.AddRange(new[]
             {
                 "AST.h",
                 "Sources.h",
                 "CppParser.h"
             });
-            options.Libraries.Add("CppSharp.CppParser.lib");
+            parserModule.OutputNamespace = string.Empty;
 
             if (Abi == CppAbi.Microsoft)
                 parserOptions.MicrosoftMode = true;
@@ -87,10 +86,9 @@ namespace CppSharp
             if (Kind == GeneratorKind.CSharp)
                 options.OutputDir = Path.Combine(options.OutputDir, parserOptions.TargetTriple + extraTriple);
 
-            options.OutputNamespace = string.Empty;
             options.CheckSymbols = false;
             //options.Verbose = true;
-            options.UnityBuild = true;
+            parserOptions.UnityBuild = true;
         }
 
         private void SetupLinuxOptions(ParserOptions options)
@@ -100,30 +98,7 @@ namespace CppSharp
 
             var headersPath = Platform.IsLinux ? string.Empty :
                 Path.Combine(GetSourceDirectory("build"), "headers", "x86_64-linux-gnu");
-
-            // Search for the available GCC versions on the provided headers.
-            var versions = Directory.EnumerateDirectories(Path.Combine(headersPath,
-                "usr/include/c++"));
-
-            if (versions.Count() == 0)
-                throw new Exception("No valid GCC version found on system include paths");
-
-            string gccVersionPath = versions.First();
-            string gccVersion = gccVersionPath.Substring(
-                gccVersionPath.LastIndexOf(Path.DirectorySeparatorChar) + 1);
-
-            string[] systemIncludeDirs = {
-                Path.Combine("usr", "include", "c++", gccVersion),
-                Path.Combine("usr", "include", "x86_64-linux-gnu", "c++", gccVersion),
-                Path.Combine("usr", "include", "c++", gccVersion, "backward"),
-                Path.Combine("usr", "lib", "gcc", "x86_64-linux-gnu", gccVersion, "include"),
-                Path.Combine("usr", "include", "x86_64-linux-gnu"),
-                Path.Combine("usr", "include")
-            };
-
-            foreach (var dir in systemIncludeDirs)
-                options.AddSystemIncludeDirs(Path.Combine(headersPath, dir));
-
+            options.SetupLinux(headersPath);
             options.AddDefines("_GLIBCXX_USE_CXX11_ABI=" + (IsGnuCpp11Abi ? "1" : "0"));
         }
 
@@ -158,21 +133,34 @@ namespace CppSharp
 
         public void SetupPasses(Driver driver)
         {
-            driver.AddTranslationUnitPass(new CheckMacroPass());
-            driver.AddTranslationUnitPass(new IgnoreStdFieldsPass());
         }
 
         public void Preprocess(Driver driver, ASTContext ctx)
         {
             ctx.RenameNamespace("CppSharp::CppParser", "Parser");
+
+            if (driver.Options.IsCSharpGenerator)
+            {
+                driver.Generator.OnUnitGenerated += o =>
+                {
+                    Block firstBlock = o.Outputs[0].RootBlock.Blocks[1];
+                    if (o.TranslationUnit.Module == driver.Options.SystemModule)
+                    {
+                        firstBlock.NewLine();
+                        firstBlock.WriteLine("[assembly:InternalsVisibleTo(\"CppSharp.Parser.CSharp\")]");
+                    }
+                    else
+                    {
+                        firstBlock.WriteLine("using System.Runtime.CompilerServices;");
+                        firstBlock.NewLine();
+                        firstBlock.WriteLine("[assembly:InternalsVisibleTo(\"CppSharp.Parser\")]");
+                    }
+                };
+            }
         }
 
         public void Postprocess(Driver driver, ASTContext ctx)
         {
-            new CaseRenamePass(
-                RenameTargets.Function | RenameTargets.Method | RenameTargets.Property | RenameTargets.Delegate |
-                RenameTargets.Field | RenameTargets.Variable,
-                RenameCasePattern.UpperCamelCase).VisitASTContext(driver.Context.ASTContext);
         }
 
         public static void Main(string[] args)
@@ -222,42 +210,6 @@ namespace CppSharp
                      CppAbi.Itanium, isGnuCpp11Abi: true));
                 Console.WriteLine();
             }
-        }
-    }
-
-    public class IgnoreStdFieldsPass : TranslationUnitPass
-    {
-        public override bool VisitFieldDecl(Field field)
-        {
-            if (!field.IsGenerated)
-                return false;
-
-            if (!IsStdType(field.QualifiedType)) return false;
-
-            field.ExplicitlyIgnore();
-            return true;
-        }
-
-        public override bool VisitFunctionDecl(Function function)
-        {
-            if (function.GenerationKind == GenerationKind.None)
-                return false;
-
-            if (function.Parameters.Any(param => IsStdType(param.QualifiedType)))
-            {
-                function.ExplicitlyIgnore();
-                return false;
-            }
-
-            return true;
-        }
-
-        private bool IsStdType(QualifiedType type)
-        {
-            var typePrinter = new CppTypePrinter();
-            var typeName = type.Visit(typePrinter);
-
-            return typeName.Contains("std::");
         }
     }
 }

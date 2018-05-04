@@ -1,4 +1,5 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using CppSharp.AST;
 using CppSharp.Generators.CLI;
@@ -20,9 +21,12 @@ namespace CppSharp.Passes
             if (char.IsNumber(name[0]))
                 return '_' + name;
 
+            // TODO: Fix this to not need per-generator code.
+            var units = new List<TranslationUnit> { new TranslationUnit() };
             if (Options.IsCLIGenerator)
-                return CLITemplate.SafeIdentifier(name);
-            return Helpers.SafeIdentifier(name);
+                return new CLIHeaders(Context, units).SafeIdentifier(name);
+
+            return new CSharpSources(Context, units).SafeIdentifier(name);
         }
 
         public override bool VisitDeclaration(Declaration decl)
@@ -43,11 +47,12 @@ namespace CppSharp.Passes
                 return true;
             }
 
-            Function function = decl as Function;
-            if ((function == null || !function.IsOperator) && !(decl is Enumeration))
+            var function = decl as Function;
+            var method = function as Method;
+            if ((function == null || !function.IsOperator) && !(decl is Enumeration) &&
+                (method == null || method.Kind == CXXMethodKind.Normal))
                 decl.Name = CheckName(decl.Name);
 
-            StringHelpers.CleanupText(ref decl.DebugText);
             return true;
         }
 
@@ -76,13 +81,14 @@ namespace CppSharp.Passes
 
             if (@class.Namespace.Classes.Any(d => d != @class && d.Name == @class.Name))
             {
-                StringBuilder str = new StringBuilder();
-                str.Append(@class.Name);
+                // we need the new name in each iteration so no point in StringBuilder
+                var name = @class.Name;
                 do
                 {
-                    str.Append('_');
-                } while (@class.Classes.Any(d => d != @class && d.Name == str.ToString()));
-                @class.Name = str.ToString();
+                    name += '_';
+                } while (@class.Namespace.Name == name ||
+                    @class.Classes.Any(d => d != @class && d.Name == name));
+                @class.Name = name;
             }
 
             return true;

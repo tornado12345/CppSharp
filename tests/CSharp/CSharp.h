@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <vector>
 #include <limits>
+#include <string>
 #include "AnotherUnit.h"
 
 class DLL_API Foo
@@ -27,6 +28,11 @@ public:
     static int makeFunctionCall();
     static int propertyCall();
     static int getGetPropertyCall();
+
+    int operator ++();
+    int operator --();
+
+    bool btest[5];
 
 protected:
     int P;
@@ -58,7 +64,7 @@ public:
     void obsolete();
     Qux* getInterface();
     void setInterface(Qux* qux);
-    virtual void v();
+    virtual void makeClassDynamic();
 };
 
 class DLL_API Bar : public Qux
@@ -81,13 +87,15 @@ public:
     Bar operator++(int i);
     void* arrayOfPrimitivePointers[1];
     Foo foos[4];
+    int getIndex();
+    void setIndex(int value);
 
 private:
     int index;
     Foo m_foo;
 };
 
-Bar::Bar() {}
+Bar::Bar() : index(0) {}
 
 class DLL_API ForceCreationOfInterface : public Foo, public Bar
 {
@@ -373,6 +381,12 @@ namespace lowerCaseNameSpace
     };
 }
 
+class DLL_API DefaultZeroMappedToEnum
+{
+public:
+    DefaultZeroMappedToEnum(int* = 0);
+};
+
 class DLL_API MethodsWithDefaultValues : public Quux
 {
 public:
@@ -384,9 +398,11 @@ public:
 
     static const char* stringConstant;
     static int intConstant;
+    typedef int* Zero;
 
     MethodsWithDefaultValues(Foo foo = Foo());
     MethodsWithDefaultValues(int a);
+    MethodsWithDefaultValues(float a, Zero b = 0);
     MethodsWithDefaultValues(double d, QList<QColor> list = QList<QColor>());
     MethodsWithDefaultValues(QRect* pointer, float f = 1, int i = std::numeric_limits<double>::infinity());
     void defaultPointer(Foo* ptr = 0);
@@ -407,6 +423,7 @@ public:
     QFlags<Flags> defaultMappedToEnum(const QFlags<Flags>& qFlags = Flags::Flag3);
     void defaultMappedToZeroEnum(QFlags<Flags> qFlags = 0);
     void defaultMappedToEnumAssignedWithCtor(QFlags<Flags> qFlags = QFlags<Flags>());
+    void defaultZeroMappedToEnumAssignedWithCtor(DefaultZeroMappedToEnum defaultZeroMappedToEnum = DefaultZeroMappedToEnum());
     void defaultImplicitCtorInt(Quux arg = 0);
     void defaultImplicitCtorChar(Quux arg = 'a');
     void defaultImplicitCtorFoo(Quux arg = Foo());
@@ -447,6 +464,8 @@ public:
     virtual void privateOverride(int i = 5);
 protected:
     virtual void publicOverride();
+private:
+    virtual void differentIncreasedAccessOverride();
 };
 
 class DLL_API HasOverridesWithChangedAccess : public HasOverridesWithChangedAccessBase
@@ -458,11 +477,20 @@ private:
     virtual void privateOverride(int i);
 };
 
+class DLL_API HasOverridesWithIncreasedProtectedAccess : public HasOverridesWithChangedAccess
+{
+public:
+    HasOverridesWithIncreasedProtectedAccess();
+protected:
+    virtual void differentIncreasedAccessOverride();
+};
+
 class DLL_API HasOverridesWithIncreasedAccess : public HasOverridesWithChangedAccess
 {
 public:
     HasOverridesWithIncreasedAccess();
     virtual void privateOverride(int i);
+    virtual void differentIncreasedAccessOverride();
 };
 
 class DLL_API AbstractWithProperty
@@ -471,7 +499,6 @@ public:
     virtual int property() = 0;
 };
 
-template <typename T>
 class DLL_API IgnoredType
 {
 };
@@ -483,10 +510,10 @@ class DLL_API IgnoredTypeInheritingNonIgnoredWithNoEmptyCtor : public P
 class DLL_API PropertyWithIgnoredType
 {
 public:
-    IgnoredType<int> ignoredType();
-    void setIgnoredType(const IgnoredType<int>& value);
+    IgnoredType ignoredType();
+    void setIgnoredType(const IgnoredType& value);
 private:
-    IgnoredType<int> _ignoredType;
+    IgnoredType _ignoredType;
 };
 
 // --- Multiple inheritance
@@ -1073,21 +1100,21 @@ class DLL_API MissingObjectOnVirtualCallSecondaryBase
 {
 public:
     MissingObjectOnVirtualCallSecondaryBase();
-    virtual void f();
+    virtual int f();
 };
 
 class DLL_API MissingObjectOnVirtualCall : public HasVirtualDtor1, public MissingObjectOnVirtualCallSecondaryBase
 {
 public:
     MissingObjectOnVirtualCall();
-    void f();
+    int f();
 };
 
 class DLL_API HasMissingObjectOnVirtualCall
 {
 public:
     HasMissingObjectOnVirtualCall();
-    void makeMissingObjectOnVirtualCall();
+    int makeMissingObjectOnVirtualCall();
     void setMissingObjectOnVirtualCall(MissingObjectOnVirtualCall* value);
 private:
     MissingObjectOnVirtualCall* stackOverflowOnVirtualCall;
@@ -1121,3 +1148,148 @@ public:
 private:
     int field;
 };
+
+class DLL_API HasBaseSetter
+{
+public:
+    HasBaseSetter();
+    ~HasBaseSetter();
+    virtual void setBaseSetter(int value);
+};
+
+class DLL_API HasGetterAndOverriddenSetter : public HasBaseSetter
+{
+public:
+    HasGetterAndOverriddenSetter();
+    ~HasGetterAndOverriddenSetter();
+    void setBaseSetter(int value);
+    int baseSetter();
+protected:
+    int field;
+};
+
+void DLL_API hasArrayOfConstChar(const char* const arrayOfConstChar[]);
+
+struct CompleteIncompleteStruct;
+
+typedef struct IncompleteStruct IncompleteStruct;
+
+DLL_API IncompleteStruct* createIncompleteStruct();
+DLL_API void useIncompleteStruct(IncompleteStruct* a);
+
+struct DLL_API DuplicateDeclaredStruct;
+
+DLL_API DuplicateDeclaredStruct* createDuplicateDeclaredStruct(int i);
+DLL_API int useDuplicateDeclaredStruct(DuplicateDeclaredStruct* s);
+
+struct DLL_API ForwardDeclaredStruct {
+    int i = 0;
+};
+
+DLL_API ForwardDeclaredStruct* createForwardDeclaredStruct(int i);
+DLL_API int useForwardDeclaredStruct(ForwardDeclaredStruct* s);
+
+typedef char charsArrayType[13];
+struct StructTestArrayTypeFromTypedef
+{
+    charsArrayType arr;
+};
+
+#define MY_MACRO_TEST_1 '1'
+#define MY_MACRO_TEST_2 '2'
+
+#define MY_MACRO_TEST2_0     0_invalid
+#define MY_MACRO_TEST2_1     1
+#define MY_MACRO_TEST2_2     0x2
+#define MY_MACRO_TEST2_3     (1 << 2)
+#define MY_MACRO_TEST2_1_2   (MY_MACRO_TEST2_1 | MY_MACRO_TEST2_2)
+#define MY_MACRO_TEST2_1_2_3 (MY_MACRO_TEST2_1 | MY_MACRO_TEST2_2 | \
+                                MY_MACRO_TEST2_3)
+#define MY_MACRO_TEST2_4     (1 << 3)
+#define MY_MACRO_TEST2_ALL   (1 << 4) - 1
+
+struct ComplexArrayElement
+{
+    bool BoolField;
+    uint32_t IntField;
+    float FloatField;
+};
+
+#define ARRAY_LENGTH_MACRO 10
+
+struct HasComplexArray
+{
+    ComplexArrayElement complexArray[ARRAY_LENGTH_MACRO];
+};
+
+class DLL_API TestIndexedProperties
+{
+public:
+    mutable int field;
+    int operator[](const int& key);
+    void* operator[](size_t n) const;
+};
+
+int TestIndexedProperties::operator[](const int& key)
+{
+    return key;
+}
+
+void* TestIndexedProperties::operator[](size_t n) const
+{
+    field = n;
+    return &field;
+}
+
+extern const ComplexArrayElement ArrayOfVariableSize[];
+
+void useStdStringJustAsParameter(std::string s);
+
+typedef int (typedefedFuncPtr)(Foo* a, Bar b);
+int DLL_API funcWithTypedefedFuncPtrAsParam(typedefedFuncPtr* func);
+
+class DLL_API TestDuplicateDelegate
+{
+public:
+    virtual typedefedFuncPtr* testDuplicateDelegate(int a);
+};
+
+
+inline namespace InlineNamespace
+{
+    DLL_API void FunctionInsideInlineNamespace();
+}
+
+class DLL_API TestArrays
+{
+public:
+    TestArrays();
+    ~TestArrays();
+    int takeArrays(Foo* arrayOfPointersToObjects[], int arrayOfPrimitives[], Foo arrayOfObjects[]) const;
+    int takeArrays(Foo* fixedArrayOfPointersToObjects[3], int fixedArrayOfPrimitives[4],
+                   int* fixedArrayOfPointersToPrimitives[5]) const;
+    std::string takeStringArray(const char* arrayOfStrings[]);
+    std::string takeConstStringArray(const char* const arrayOfStrings[]);
+    virtual int virtualTakeArrays(Foo* arrayOfPointersToObjects[], int arrayOfPrimitives[], Foo arrayOfObjects[]) const;
+    virtual int virtualTakeArrays(Foo* fixedArrayOfPointersToObjects[3], int fixedArrayOfPrimitives[4],
+                                  int* fixedArrayOfPointersToPrimitives[5]) const;
+};
+
+
+class TestForwardedClassInAnotherUnit
+{
+};
+
+class DLL_API HasFixedArrayOfPointers
+{
+public:
+    HasFixedArrayOfPointers();
+    ~HasFixedArrayOfPointers();
+    Foo* fixedArrayOfPointers[3];
+};
+
+struct DLL_API CSharp
+{
+};
+
+static int FOOBAR_CONSTANT = 42;

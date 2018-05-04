@@ -7,19 +7,38 @@ namespace CppSharp.AST
     public enum TypePrinterContextKind
     {
         Normal,
-        Template
+        Template,
+        Native,
+        Managed
     }
 
-    public abstract class TypePrinterContext
+    public enum MarshalKind
     {
-        protected TypePrinterContext()
+        Unknown,
+        NativeField,
+        GenericDelegate,
+        DefaultExpression,
+        VTableReturnValue,
+        Variable,
+        ReturnVariableArray
+    }
+
+    public class TypePrinterContext
+    {
+        public TypePrinterContextKind Kind;
+        public MarshalKind MarshalKind;
+        public Declaration Declaration;
+        public Parameter Parameter;
+        public Type Type;
+
+        public TypePrinterContext() : this(TypePrinterContextKind.Normal)
         {
-            Kind = TypePrinterContextKind.Normal;
         }
 
-        protected TypePrinterContext(TypePrinterContextKind kind)
+        public TypePrinterContext(TypePrinterContextKind kind)
         {
             Kind = kind;
+            MarshalKind = MarshalKind.Unknown;
         }
 
         public string GetTemplateParameterList()
@@ -36,7 +55,14 @@ namespace CppSharp.AST
             if (templateSpecializationType != null)
                 templateArgs = templateSpecializationType.Arguments;
             else
-                templateArgs = ((ClassTemplateSpecialization) ((TagType) type).Declaration).Arguments;
+            {
+                var declaration = ((TagType) type).Declaration;
+                var specialization = declaration as ClassTemplateSpecialization;
+                if (specialization == null)
+                    return string.Join(", ",
+                        ((Class) declaration).TemplateParameters.Select(t => t.Name));
+                templateArgs = ((ClassTemplateSpecialization) declaration).Arguments;
+            }
 
             var paramsList = new List<string>();
             foreach (var arg in templateArgs.Where(a => a.Kind == TemplateArgument.ArgumentKind.Type))
@@ -49,11 +75,6 @@ namespace CppSharp.AST
 
             return string.Join(", ", paramsList);
         }
-
-        public TypePrinterContextKind Kind;
-        public Declaration Declaration;
-        public Parameter Parameter;
-        public Type Type;
     }
 
     public interface ITypePrinter

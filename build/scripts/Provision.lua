@@ -2,11 +2,11 @@ require "Utils"
 
 function download_ninja()
 	local system = "";
-	if os.is("windows") then
+	if os.ishost("windows") then
 		system = "win"
-	elseif os.is("macosx") then
+	elseif os.ishost("macosx") then
 		system = "mac"
-	elseif os.is("linux") then
+	elseif os.ishost("linux") then
 		system = "linux"
 	else
 		error("Error downloading Ninja for unknown system")
@@ -27,22 +27,26 @@ end
 
 function download_cmake()
 	local system = "";
-	if os.is("windows") then
+	if os.ishost("windows") then
 		system = "win32-x86.zip"
-	elseif os.is("macosx") then
+	elseif os.ishost("macosx") then
 		system = "Darwin-x86_64.dmg"
-	elseif os.is("linux") then
-		system = "Linux-x86_64.tar.gz"
+	elseif os.ishost("linux") then
+		system = "Linux-x86_64.sh"
 	else
 		error("Error downloading CMake for unknown system")
 	end
 
-	local url = "https://cmake.org/files/v3.6/cmake-3.6.1-" .. system
-	local file = "cmake" .. path.getextension(system)
+	local base = "cmake-3.8.2-" 
+	local file = base .. system
+
+	local url = "https://cmake.org/files/v3.8/" .. file
 
 	if not os.isfile(file) then
 		download(url, file)
 	end
+
+	return file
 end
 
 function download_nuget()
@@ -52,7 +56,7 @@ function download_nuget()
 end
 
 function restore_nuget_packages()
-  local nugetexe = os.is("windows") and "NuGet.exe" or "mono ./NuGet.exe"
+  local nugetexe = os.ishost("windows") and "NuGet.exe" or "mono ./NuGet.exe"
   execute(nugetexe .. " restore packages.config -PackagesDirectory " .. depsdir)
 end
 
@@ -60,8 +64,8 @@ local compile_llvm = is_vagrant()
 
 function provision_linux()
 	-- Add Repos
-	sudo("apt-key adv --keyserver http://keyserver.ubuntu.com:80 --recv-keys 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF")
-	sudo("echo \"deb http://download.mono-project.com/repo/debian wheezy main\" | sudo tee /etc/apt/sources.list.d/mono-xamarin.list")
+	sudo("apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF")
+	sudo("echo \"deb http://download.mono-project.com/repo/ubuntu xenial main\" | sudo tee /etc/apt/sources.list.d/mono-xamarin.list")
 
 	sudo("apt-get update")
 
@@ -74,7 +78,10 @@ function provision_linux()
 	-- LLVM/Clang build tools
 	if compile_llvm then
 		sudo("apt-get install -y ninja-build")
-		download_cmake()
+		local file = download_cmake()
+		sudo("mkdir -p /opt/cmake")
+		sudo("bash " .. file .. " --prefix=/opt/cmake --skip-license")
+		sudo("ln -s /opt/cmake/bin/cmake /usr/local/bin/cmake")
 	end
 end
 
@@ -99,9 +106,9 @@ if _ACTION == "cmake" then
 end
 
 if _ACTION == "provision" then
-  if os.is("linux") then
+  if os.ishost("linux") then
   	provision_linux()
-  elseif os.is("macosx") then
+  elseif os.ishost("macosx") then
   	provision_osx()
   end
   os.exit()

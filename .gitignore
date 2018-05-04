@@ -8,7 +8,6 @@ autom4te.cache
 missing
 *Makefile
 *Makefile.in
-*.dll
 *.exe
 bin/
 *.userprefs
@@ -36,14 +35,22 @@ src/generator/generator
 *DesignTime*
 *TemporaryGeneratedFile*
 *FileListAbsolute*
-/build/scripts/llvm*
+/build/scripts/*.tar.gz
 /build/scripts/.vagrant
 /build/vs2012
 /build/vs2013
 /build/vs2015
+/build/vs2017
 /build/gmake
 /build/headers
 /deps/llvm
+/deps/NUnit*
 /extra
 /site
 /wip
+/.vs
+
+# Nuget: do not include produced packages
+/build/nuget/*.nupkg
+/build/nuget/tools/*
+

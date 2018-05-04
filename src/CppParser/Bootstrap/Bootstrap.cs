@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using CppSharp.AST;
+using CppSharp.Generators;
 
 namespace CppSharp
 {
@@ -30,28 +31,36 @@ namespace CppSharp
 
         public void Setup(Driver driver)
         {
-            var options = driver.Options;
-            options.LibraryName = "CppSharp";
-            options.DryRun = true;
-            options.Headers.AddRange(new string[]
-            {
-                "clang/AST/Expr.h",
-            });
+            driver.Options.GeneratorKind = GeneratorKind.CSharp;
+            driver.Options.DryRun = true;
+            driver.ParserOptions.SetupXcode();
+            driver.ParserOptions.MicrosoftMode = false;
+            driver.ParserOptions.TargetTriple = "i686-apple-darwin12.4.0";
 
-            options.SetupXcode();
-            options.MicrosoftMode = false;
-            options.TargetTriple = "i686-apple-darwin12.4.0";
+            var module = driver.Options.AddModule("CppSharp");
 
-            options.addDefines ("__STDC_LIMIT_MACROS");
-            options.addDefines ("__STDC_CONSTANT_MACROS");
+            module.Defines.Add("__STDC_LIMIT_MACROS");
+            module.Defines.Add("__STDC_CONSTANT_MACROS");
 
             var llvmPath = Path.Combine (GetSourceDirectory ("deps"), "llvm");
             var clangPath = Path.Combine(llvmPath, "tools", "clang");
 
-            options.addIncludeDirs(Path.Combine(llvmPath, "include"));
-            options.addIncludeDirs(Path.Combine(llvmPath, "build", "include"));
-            options.addIncludeDirs (Path.Combine (llvmPath, "build", "tools", "clang", "include"));
-            options.addIncludeDirs(Path.Combine(clangPath, "include"));
+            module.IncludeDirs.AddRange(new[]
+            {
+                Path.Combine(llvmPath, "include"),
+                Path.Combine(llvmPath, "build", "include"),
+                Path.Combine(llvmPath, "build", "tools", "clang", "include"),
+                Path.Combine(clangPath, "include")
+            });
+
+            module.Headers.AddRange(new[]
+            {
+                "clang/AST/Expr.h",
+                "CppSharp.h"
+            });
+
+            module.LibraryDirs.Add(Path.Combine(llvmPath, "lib"));
+            module.Libraries.Add("CppSharp.lib");
         }
 
         public void SetupPasses(Driver driver)

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using CppSharp.AST;
@@ -26,11 +26,11 @@ namespace CppSharp
         private void OnUnitGenerated(GeneratorOutput output)
         {
             needsStreamInclude = false;
-            foreach (var template in output.Templates)
+            foreach (var template in output.Outputs)
             {
-                foreach (var block in template.FindBlocks(CLIBlockKind.MethodBody))
+                foreach (var block in template.FindBlocks(BlockKind.MethodBody))
                 {
-                    var method = block.Declaration as Method;
+                    var method = block.Object as Method;
                     VisitMethod(method, block);
                 }
                 if (needsStreamInclude)
@@ -38,7 +38,7 @@ namespace CppSharp
                     var sourcesTemplate = template as CLISources;
                     if (sourcesTemplate != null)
                     {
-                        foreach (var block in sourcesTemplate.FindBlocks(CLIBlockKind.Includes))
+                        foreach (var block in sourcesTemplate.FindBlocks(BlockKind.Includes))
                         {
                             block.WriteLine("#include <sstream>");
                             block.WriteLine("");
@@ -64,7 +64,7 @@ namespace CppSharp
                 GenerateEquals(@class, block, method);
 
             if (method.Name == "ToString" && method.Parameters.Count == 0)
-                GenerateToString(@class, block, method);
+                GenerateToString(block);
         }
 
         void GenerateGetHashCode(Block block)
@@ -86,7 +86,7 @@ namespace CppSharp
             block.Write("return __Instance == obj->__Instance;");
         }
 
-        void GenerateToString(Class @class, Block block, Method method)
+        void GenerateToString(Block block)
         {
             needsStreamInclude = true;
             block.WriteLine("std::ostringstream os;");
@@ -127,10 +127,9 @@ namespace CppSharp
                     Namespace = @class,
                     ReturnType = new QualifiedType(stringType),
                     SynthKind = FunctionSynthKind.ComplementOperator,
-                    IsOverride = true,
                     IsProxy = true
                 };
-
+                toStringMethod.OverriddenMethods.Add(new Method { Name = "ToString" });
                 @class.Methods.Add(toStringMethod);
 
                 Diagnostics.Debug("Function converted to ToString: {0}::{1}",
@@ -142,7 +141,7 @@ namespace CppSharp
             var methodEqualsParam = new Parameter
             {
                 Name = "object",
-                QualifiedType = new QualifiedType(new CILType(typeof(Object))),
+                QualifiedType = new QualifiedType(new CILType(typeof(Object)))
             };
 
             var methodEquals = new Method
@@ -150,11 +149,14 @@ namespace CppSharp
                 Name = "Equals",
                 Namespace = @class,
                 ReturnType = new QualifiedType(new BuiltinType(PrimitiveType.Bool)),
-                Parameters = new List<Parameter> { methodEqualsParam },
                 SynthKind = FunctionSynthKind.ComplementOperator,
-                IsOverride = true,
                 IsProxy = true
             };
+
+            methodEqualsParam.Namespace = methodEquals;
+            methodEquals.Parameters.Add(methodEqualsParam);
+
+            methodEquals.OverriddenMethods.Add(new Method { Name = "Equals" });
             @class.Methods.Add(methodEquals);
 
             var methodHashCode = new Method
@@ -163,9 +165,9 @@ namespace CppSharp
                 Namespace = @class,
                 ReturnType = new QualifiedType(new BuiltinType(PrimitiveType.Int)),
                 SynthKind = FunctionSynthKind.ComplementOperator,
-                IsOverride = true,
                 IsProxy = true
             };
+            methodHashCode.OverriddenMethods.Add(new Method { Name = "GetHashCode" });
 
             @class.Methods.Add(methodHashCode);
             return true;

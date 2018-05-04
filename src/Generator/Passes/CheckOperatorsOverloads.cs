@@ -23,12 +23,12 @@ namespace CppSharp.Passes
             if (!VisitDeclarationContext(@class))
                 return false;
 
-            // Check for C++ operators that cannot be represented in C#.
+            // Check for C++ operators that cannot be represented in .NET.
             CheckInvalidOperators(@class);
 
             if (Options.IsCSharpGenerator)
             {
-                // The comparison operators, if overloaded, must be overloaded in pairs;
+                // In C# the comparison operators, if overloaded, must be overloaded in pairs;
                 // that is, if == is overloaded, != must also be overloaded. The reverse
                 // is also true, and similar for < and >, and for <= and >=.
 
@@ -61,31 +61,32 @@ namespace CppSharp.Passes
                     continue;
 
                 if (@operator.OperatorKind == CXXOperatorKind.Subscript)
-                {
                     CreateIndexer(@class, @operator);
-                }
                 else
+                    CreateOperator(@class, @operator);
+            }
+        }
+
+        private static void CreateOperator(Class @class, Method @operator)
+        {
+            if (@operator.IsStatic)
+                @operator.Parameters.RemoveAt(0);
+
+            if (@operator.ConversionType.Type == null || @operator.Parameters.Count == 0)
+            {
+                var type = new PointerType
                 {
-                    // Handle missing operator parameters
-                    if (@operator.IsStatic)
-                        @operator.Parameters = @operator.Parameters.Skip(1).ToList();
+                    QualifiedPointee = new QualifiedType(new TagType(@class)),
+                    Modifier = PointerType.TypeModifier.LVReference
+                };
 
-                    if (@operator.ConversionType.Type == null || @operator.Parameters.Count == 0)
-                    {
-                        var type = new PointerType
-                        {
-                            QualifiedPointee = new QualifiedType(new TagType(@class)),
-                            Modifier = PointerType.TypeModifier.LVReference
-                        };
-
-                        @operator.Parameters.Insert(0, new Parameter
-                        {
-                            Name = Generator.GeneratedIdentifier("op"),
-                            QualifiedType = new QualifiedType(type),
-                            Kind = ParameterKind.OperatorParameter
-                        });
-                    }
-                }
+                @operator.Parameters.Insert(0, new Parameter
+                {
+                    Name = Generator.GeneratedIdentifier("op"),
+                    QualifiedType = new QualifiedType(type),
+                    Kind = ParameterKind.OperatorParameter,
+                    Namespace = @operator
+                });
             }
         }
 
@@ -101,7 +102,8 @@ namespace CppSharp.Passes
                 };
 
             var returnType = @operator.Type;
-            if (returnType.IsAddress())
+            if (returnType.IsAddress() &&
+                !returnType.GetQualifiedPointee().Type.Desugar().IsPrimitiveType(PrimitiveType.Void))
             {
                 var pointer = (PointerType) returnType;
                 var qualifiedPointee = pointer.QualifiedPointee;
@@ -146,9 +148,11 @@ namespace CppSharp.Passes
                         SynthKind = FunctionSynthKind.ComplementOperator,
                         Kind = CXXMethodKind.Operator,
                         OperatorKind = missingKind,
-                        ReturnType = op.ReturnType,
-                        Parameters = op.Parameters
+                        ReturnType = op.ReturnType
                     };
+
+                method.Parameters.AddRange(op.Parameters.Select(
+                    p => new Parameter(p) { Namespace = method }));
 
                 @class.Methods.Insert(index, method);
             }
@@ -220,7 +224,13 @@ namespace CppSharp.Passes
                 // Only prefix operators can be overloaded
                 case CXXOperatorKind.PlusPlus:
                 case CXXOperatorKind.MinusMinus:
-                    return @operator.Parameters.Count == 0;
+                    Class @class;
+                    var returnType = @operator.OriginalReturnType.Type.Desugar();
+                    returnType = (returnType.GetFinalPointee() ?? returnType).Desugar();
+                    return returnType.TryGetClass(out @class) &&
+                        @class.GetNonIgnoredRootBase() ==
+                            ((Class) @operator.Namespace).GetNonIgnoredRootBase() &&
+                        @operator.Parameters.Count == 0;
 
                 // Bitwise shift operators can only be overloaded if the second parameter is int
                 case CXXOperatorKind.LessLess:

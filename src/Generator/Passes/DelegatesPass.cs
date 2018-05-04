@@ -3,32 +3,15 @@ using System.Linq;
 using System.Text;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
-using CppSharp.Generators;
 using CppSharp.Generators.CSharp;
 
 namespace CppSharp.Passes
 {
     public class DelegatesPass : TranslationUnitPass
     {
-        public const string DelegatesNamespace = "Delegates";
-
-        public class DelegateDefinition
-        {
-            public DelegateDefinition(string @namespace, string signature)
-            {
-                Namespace = @namespace;
-                Signature = signature;
-            }
-
-            public string Namespace { get; private set; }
-
-            public string Signature { get; private set; }
-        }
-
         public DelegatesPass()
         {
             VisitOptions.VisitClassBases = false;
-            VisitOptions.VisitFunctionParameters = false;
             VisitOptions.VisitFunctionReturnType = false;
             VisitOptions.VisitNamespaceEnums = false;
             VisitOptions.VisitNamespaceTemplates = false;
@@ -37,50 +20,30 @@ namespace CppSharp.Passes
 
         public override bool VisitASTContext(ASTContext context)
         {
-            foreach (var library in Options.Modules.SelectMany(m => m.Libraries))
-                libsDelegates[library] = new Dictionary<string, DelegateDefinition>();
+            bool result = base.VisitASTContext(context);
 
-            var unit = context.TranslationUnits.GetGenerated().LastOrDefault();
+            foreach (var @delegate in delegates)
+                @delegate.Namespace.Declarations.Add(@delegate);
+            delegates.Clear();
 
-            if (unit == null)
-                return false;
+            if (!Options.IsCSharpGenerator)
+                return result;
 
-            var result = base.VisitASTContext(context);
-
-            foreach (var module in Options.Modules.Where(m => namespacesDelegates.ContainsKey(m)))
-                module.Units.Last(u => u.HasDeclarations).Declarations.Add(namespacesDelegates[module]);
+            foreach (var module in Options.Modules.Where(namespacesDelegates.ContainsKey))
+            {
+                var @namespace = namespacesDelegates[module];
+                @namespace.Namespace.Declarations.Add(@namespace);
+            }
 
             return result;
         }
 
         public override bool VisitClassDecl(Class @class)
         {
-            if (!base.VisitClassDecl(@class))
+            if (@class.Ignore)
                 return false;
 
-            // dependent types with virtuals have no own virtual layouts
-            // so virtuals are considered different objects in template instantiations
-            // therefore the method itself won't be visited, so let's visit it through the v-table
-            if (Context.ParserOptions.IsMicrosoftAbi)
-            {
-                foreach (var method in from vfTable in @class.Layout.VFTables
-                                       from component in vfTable.Layout.Components
-                                       where component.Method != null
-                                       select component.Method)
-                    VisitMethodDecl(method);
-            }
-            else
-            {
-                if (@class.Layout.Layout == null)
-                    return false;
-
-                foreach (var method in from component in @class.Layout.Layout.Components
-                                       where component.Method != null
-                                       select component.Method)
-                    VisitMethodDecl(method);
-            }
-
-            return true;
+            return base.VisitClassDecl(@class);
         }
 
         public override bool VisitMethodDecl(Method method)
@@ -88,106 +51,202 @@ namespace CppSharp.Passes
             if (!base.VisitMethodDecl(method) || !method.IsVirtual || method.Ignore)
                 return false;
 
-            var @params = method.GatherInternalParams(Context.ParserOptions.IsItaniumLikeAbi, true).ToList();
-            var delegateName = GenerateDelegateSignature(@params, method.ReturnType);
-
-            var module = method.TranslationUnit.Module;
-
-            Namespace namespaceDelegates;
-            if (namespacesDelegates.ContainsKey(module))
-            {
-                namespaceDelegates = namespacesDelegates[module];
-            }
-            else
-            {
-                namespaceDelegates = new Namespace
-                {
-                    Name = DelegatesNamespace,
-                    Namespace = module.Units.Last()
-                };
-                namespacesDelegates.Add(module, namespaceDelegates);
-            }
-
-            var @delegate = new TypedefDecl
-                {
-                    Name = delegateName,
-                    QualifiedType = new QualifiedType(
-                        new PointerType(
-                            new QualifiedType(
-                                new FunctionType
-                                {
-                                    CallingConvention = method.CallingConvention,
-                                    IsDependent = method.IsDependent,
-                                    Parameters = @params,
-                                    ReturnType = method.ReturnType
-                                }))),
-                    Namespace = namespaceDelegates,
-                    IsSynthetized = true
-                };
-
-            Generator.CurrentOutputNamespace = module.OutputNamespace;
-            var delegateString = @delegate.Visit(TypePrinter).Type;
-            var existingDelegate = GetExistingDelegate(
-                method.TranslationUnit.Module.Libraries, delegateString);
-
-            if (existingDelegate != null)
-            {
-                Context.Delegates.Add(method, existingDelegate);
-                return true;
-            }
-
-            existingDelegate = new DelegateDefinition(module.OutputNamespace, delegateString);
-            Context.Delegates.Add(method, existingDelegate);
-
-            foreach (var library in module.Libraries)
-                libsDelegates[library].Add(delegateString, existingDelegate);
-
-            namespaceDelegates.Declarations.Add(@delegate);
+            method.FunctionType = CheckForDelegate(method.FunctionType, method);
 
             return true;
         }
 
-        private DelegateDefinition GetExistingDelegate(IList<string> libraries, string delegateString)
+        public override bool VisitFunctionDecl(Function function)
         {
-            if (libraries.Count == 0)
-                return Context.Delegates.Values.FirstOrDefault(t => t.Signature == delegateString);
+            if (!base.VisitFunctionDecl(function) || function.Ignore)
+                return false;
 
-            DelegateDefinition @delegate = null;
-            if (libraries.Union(
-                Context.Symbols.Libraries.Where(l => libraries.Contains(l.FileName)).SelectMany(
-                    l => l.Dependencies)).Any(l => libsDelegates.ContainsKey(l) &&
-                        libsDelegates[l].TryGetValue(delegateString, out @delegate)))
-                return @delegate;
-
-            return null;
+            function.ReturnType = CheckForDelegate(function.ReturnType, function);
+            return true;
         }
 
-        private string GenerateDelegateSignature(IEnumerable<Parameter> @params, QualifiedType returnType)
+        public override bool VisitParameterDecl(Parameter parameter)
         {
-            TypePrinter.PushContext(CSharpTypePrinterContextKind.Native);
-            CSharpTypePrinter.AppendGlobal = false;
+            if (!base.VisitDeclaration(parameter) || parameter.Namespace == null ||
+                parameter.Namespace.Ignore)
+                return false;
+
+            parameter.QualifiedType = CheckForDelegate(parameter.QualifiedType, parameter);
+
+            return true;
+        }
+
+        private QualifiedType CheckForDelegate(QualifiedType type, ITypedDecl decl)
+        {
+            if (type.Type is TypedefType)
+                return type;
+
+            var desugared = type.Type.Desugar();
+            if (desugared.IsDependent)
+                return type;
+
+            Type pointee = desugared.GetPointee() ?? desugared;
+            if (pointee is TypedefType)
+                return type;
+
+            var functionType = pointee.Desugar() as FunctionType;
+            if (functionType == null)
+                return type;
+
+            TypedefDecl @delegate = GetDelegate(type, decl);
+            return new QualifiedType(new TypedefType { Declaration = @delegate });
+        }
+
+        private TypedefDecl GetDelegate(QualifiedType type, ITypedDecl typedDecl)
+        {
+            FunctionType newFunctionType = GetNewFunctionType(typedDecl, type);
+
+            var delegateName = GetDelegateName(newFunctionType);
+            var access = typedDecl is Method ? AccessSpecifier.Private : AccessSpecifier.Public;
+            var decl = (Declaration) typedDecl;
+            Module module = decl.TranslationUnit.Module;
+            var existingDelegate = delegates.Find(t => Match(t, delegateName, module));
+            if (existingDelegate != null)
+            {
+                // Ensure a delegate used for a virtual method and a type is public
+                if (existingDelegate.Access == AccessSpecifier.Private &&
+                    access == AccessSpecifier.Public)
+                    existingDelegate.Access = access;
+
+                // Check if there is an existing delegate with a different calling convention
+                if (((FunctionType) existingDelegate.Type.GetPointee()).CallingConvention ==
+                    newFunctionType.CallingConvention)
+                    return existingDelegate;
+
+                // Add a new delegate with the calling convention appended to its name
+                delegateName += '_' + newFunctionType.CallingConvention.ToString();
+                existingDelegate = delegates.Find(t => Match(t, delegateName, module));
+                if (existingDelegate != null)
+                    return existingDelegate;
+            }
+
+            var namespaceDelegates = GetDeclContextForDelegates(decl.Namespace);
+            var delegateType = new QualifiedType(new PointerType(new QualifiedType(newFunctionType)));
+            existingDelegate = new TypedefDecl
+                {
+                    Access = access,
+                    Name = delegateName,
+                    Namespace = namespaceDelegates,
+                    QualifiedType = delegateType,
+                    IsSynthetized = true
+                };
+            delegates.Add(existingDelegate);
+
+            return existingDelegate;
+        }
+
+        private FunctionType GetNewFunctionType(ITypedDecl decl, QualifiedType type)
+        {
+            var functionType = new FunctionType();
+            var method = decl as Method;
+            if (method != null && method.FunctionType == type)
+            {
+                functionType.Parameters.AddRange(
+                    method.GatherInternalParams(Context.ParserOptions.IsItaniumLikeAbi, true));
+                functionType.CallingConvention = method.CallingConvention;
+                functionType.IsDependent = method.IsDependent;
+                functionType.ReturnType = method.ReturnType;
+            }
+            else
+            {
+                var funcTypeParam = (FunctionType) decl.Type.Desugar().GetFinalPointee().Desugar();
+                functionType = new FunctionType(funcTypeParam);
+            }
+
+            for (int i = 0; i < functionType.Parameters.Count; i++)
+                functionType.Parameters[i].Name = $"_{i}";
+
+            return functionType;
+        }
+
+        private static bool Match(TypedefDecl t, string delegateName, Module module)
+        {
+            return t.Name == delegateName &&
+                (module == t.TranslationUnit.Module ||
+                 module.Dependencies.Contains(t.TranslationUnit.Module));
+        }
+
+        private DeclarationContext GetDeclContextForDelegates(DeclarationContext @namespace)
+        {
+            if (Options.IsCLIGenerator)
+                return @namespace is Function ? @namespace.Namespace : @namespace;
+
+            var module = @namespace.TranslationUnit.Module;
+            if (namespacesDelegates.ContainsKey(module))
+                return namespacesDelegates[module];
+
+            Namespace parent = null;
+            if (string.IsNullOrEmpty(module.OutputNamespace))
+            {
+                var groups = module.Units.SelectMany(u => u.Declarations).OfType<Namespace>(
+                    ).GroupBy(d => d.Name).Where(g => g.Any(d => d.HasDeclarations)).ToList();
+                if (groups.Count == 1)
+                    parent = groups.Last().Last();
+                else
+                {
+                    foreach (var g in groups)
+                    {
+                        parent = g.ToList().Find(ns => ns.Name == module.LibraryName || ns.Name == module.OutputNamespace);
+                        if (parent != null)
+                            break;
+                    }
+                }
+            }
+
+            if (parent == null)
+                parent = module.Units.Last();
+
+            var namespaceDelegates = new Namespace
+                {
+                    Name = "Delegates",
+                    Namespace = parent
+                };
+            namespacesDelegates.Add(module, namespaceDelegates);
+
+            return namespaceDelegates;
+        }
+
+        private string GetDelegateName(FunctionType functionType)
+        {
             var typesBuilder = new StringBuilder();
-            if (!returnType.Type.IsPrimitiveType(PrimitiveType.Void))
+            if (!functionType.ReturnType.Type.IsPrimitiveType(PrimitiveType.Void))
             {
-                typesBuilder.Insert(0, returnType.Type.CSharpType(TypePrinter));
+                typesBuilder.Insert(0, functionType.ReturnType.Visit(TypePrinter));
                 typesBuilder.Append('_');
             }
-            foreach (var parameter in @params)
+
+            foreach (var parameter in functionType.Parameters)
             {
-                typesBuilder.Append(parameter.CSharpType(TypePrinter));
+                typesBuilder.Append(parameter.Visit(TypePrinter));
                 typesBuilder.Append('_');
             }
+
             if (typesBuilder.Length > 0)
                 typesBuilder.Remove(typesBuilder.Length - 1, 1);
-            var delegateName = Helpers.FormatTypesStringForIdentifier(typesBuilder);
-            if (returnType.Type.IsPrimitiveType(PrimitiveType.Void))
-                delegateName = "Action_" + delegateName;
-            else
-                delegateName = "Func_" + delegateName;
 
-            TypePrinter.PopContext();
-            CSharpTypePrinter.AppendGlobal = true;
-            return delegateName;
+            var delegateName = FormatTypesStringForIdentifier(typesBuilder);
+            if (functionType.ReturnType.Type.IsPrimitiveType(PrimitiveType.Void))
+                delegateName.Insert(0, "Action_");
+            else
+                delegateName.Insert(0, "Func_");
+
+            return delegateName.ToString();
+        }
+
+        private static StringBuilder FormatTypesStringForIdentifier(StringBuilder types)
+        {
+            // TODO: all of this needs proper general fixing by only leaving type names
+            return types.Replace("global::System.", string.Empty)
+                .Replace("[MarshalAs(UnmanagedType.LPStr)] ", string.Empty)
+                .Replace("[MarshalAs(UnmanagedType.LPWStr)] ", string.Empty)
+                .Replace("global::", string.Empty).Replace("*", "Ptr")
+                .Replace('.', '_').Replace(' ', '_').Replace("::", "_")
+                .Replace("[]", "Array");
         }
 
         private CSharpTypePrinter TypePrinter
@@ -197,16 +256,20 @@ namespace CppSharp.Passes
                 if (typePrinter == null)
                 {
                     typePrinter = new CSharpTypePrinter(Context);
-                    typePrinter.PushContext(CSharpTypePrinterContextKind.Native);
-                    typePrinter.PushMarshalKind(CSharpMarshalKind.GenericDelegate);
+                    typePrinter.PushContext(TypePrinterContextKind.Native);
+                    typePrinter.PushMarshalKind(MarshalKind.GenericDelegate);
                 }
                 return typePrinter;
             }
         }
 
-        private Dictionary<Module, Namespace> namespacesDelegates = new Dictionary<Module, Namespace>();
+        private Dictionary<Module, DeclarationContext> namespacesDelegates = new Dictionary<Module, DeclarationContext>();
         private CSharpTypePrinter typePrinter;
-        private static readonly Dictionary<string, Dictionary<string, DelegateDefinition>> libsDelegates =
-            new Dictionary<string, Dictionary<string, DelegateDefinition>>();
+
+        /// <summary>
+        /// The generated typedefs. The tree can't be modified while
+        /// iterating over it, so we collect all the typedefs and add them at the end.
+        /// </summary>
+        private readonly List<TypedefDecl> delegates = new List<TypedefDecl>();
     }
 }

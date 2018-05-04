@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
@@ -11,12 +12,12 @@ namespace CppSharp.Types.Std
     [TypeMap("va_list")]
     public class VaList : TypeMap
     {
-        public override string CLISignature(CLITypePrinterContext ctx)
+        public override string CLISignature(TypePrinterContext ctx)
         {
             return "va_list";
         }
 
-        public override string CSharpSignature(CSharpTypePrinterContext ctx)
+        public override string CSharpSignature(TypePrinterContext ctx)
         {
             return "va_list";
         }
@@ -27,10 +28,10 @@ namespace CppSharp.Types.Std
         }
     }
 
-    [TypeMap("std::basic_string<char, std::char_traits<char>, std::allocator<char>>")]
+    [TypeMap("basic_string<char, char_traits<char>, allocator<char>>")]
     public class String : TypeMap
     {
-        public override string CLISignature(CLITypePrinterContext ctx)
+        public override string CLISignature(TypePrinterContext ctx)
         {
             return "System::String^";
         }
@@ -47,13 +48,13 @@ namespace CppSharp.Types.Std
                 ctx.ReturnVarName);
         }
 
-        public override string CSharpSignature(CSharpTypePrinterContext ctx)
+        public override string CSharpSignature(TypePrinterContext ctx)
         {
-            if (ctx.CSharpKind == CSharpTypePrinterContextKind.Managed)
+            if (ctx.Kind == TypePrinterContextKind.Managed)
                 return "string";
             ClassTemplateSpecialization basicString = GetBasicString(ctx.Type);
             var typePrinter = new CSharpTypePrinter(null);
-            typePrinter.PushContext(CSharpTypePrinterContextKind.Native);
+            typePrinter.PushContext(TypePrinterContextKind.Native);
             return basicString.Visit(typePrinter).Type;
         }
 
@@ -62,59 +63,73 @@ namespace CppSharp.Types.Std
             var type = ctx.Parameter.Type.Desugar();
             ClassTemplateSpecialization basicString = GetBasicString(type);
             var typePrinter = new CSharpTypePrinter(ctx.Context);
-            typePrinter.PushContext(CSharpTypePrinterContextKind.Native);
             if (!ctx.Parameter.Type.Desugar().IsAddress())
-                ctx.Return.Write("*({0}*) ", basicString.Visit(typePrinter));
-            typePrinter.PopContext();
+                ctx.Return.Write($"*({typePrinter.PrintNative(basicString)}*) ");
             var allocator = ctx.Context.ASTContext.FindClass("allocator", false, true).First(
                 a => a.IsDependent && a.TranslationUnit.IsSystemHeader);
+            var allocatorChar = allocator.Specializations.First(s => !s.Ignore);
+            string qualifiedBasicString = GetQualifiedBasicString(basicString);
             if (type.IsPointer() || (type.IsReference() && ctx.Declaration is Field))
             {
-                ctx.Return.Write("new {0}({1}, new {2}()).{3}",
-                    basicString.Visit(typePrinter), ctx.Parameter.Name,
-                    allocator.Visit(typePrinter), Helpers.InstanceIdentifier);
+                ctx.Return.Write($@"{qualifiedBasicString}Extensions.{basicString.Name}({
+                    ctx.Parameter.Name}, new {allocatorChar.Visit(typePrinter)}()).{
+                    Helpers.InstanceIdentifier}");
             }
             else
             {
-                string varAllocator = "__allocator" + ctx.ParameterIndex;
-                string varBasicString = "__basicString" + ctx.ParameterIndex;
-                ctx.SupportBefore.WriteLine("var {0} = new {1}();",
-                    varAllocator, allocator.Visit(typePrinter));
-                ctx.SupportBefore.WriteLine("var {0} = new {1}({2}, {3});",
-                    varBasicString, basicString.Visit(typePrinter),
-                    ctx.Parameter.Name, varAllocator);
-                ctx.Return.Write("{0}.{1}", varBasicString, Helpers.InstanceIdentifier);
-                ctx.Cleanup.WriteLine("{0}.Dispose({1});", varBasicString,
-                    type.IsPointer() ? "true" : "false");
-                ctx.Cleanup.WriteLine("{0}.Dispose();", varAllocator);
+                var varAllocator = $"__allocator{ctx.ParameterIndex}";
+                var varBasicString = $"__basicString{ctx.ParameterIndex}";
+                ctx.Before.WriteLine($@"var {varAllocator} = new {
+                    allocatorChar.Visit(typePrinter)}();");
+                ctx.Before.WriteLine($@"var {varBasicString} = {
+                    qualifiedBasicString}Extensions.{basicString.Name}({ctx.Parameter.Name}, {
+                    varAllocator});");
+                ctx.Return.Write($"{varBasicString}.{Helpers.InstanceIdentifier}");
+                ctx.Cleanup.WriteLine($@"{varBasicString}.Dispose({
+                    (type.IsPointer() ? "true" : "false")});");
+                ctx.Cleanup.WriteLine($"{varAllocator}.Dispose();");
             }
         }
 
         public override void CSharpMarshalToManaged(CSharpMarshalContext ctx)
         {
-            var type = ctx.ReturnType.Type;
+            var type = Type.Desugar(resolveTemplateSubstitution: false);
             ClassTemplateSpecialization basicString = GetBasicString(type);
-            Declaration c_str = basicString.Methods.FirstOrDefault(m => m.OriginalName == "c_str");
-            if (!c_str.IsGenerated)
-                c_str = basicString.Properties.First(p => p.OriginalName == "c_str");
+            var c_str = basicString.Methods.First(m => m.OriginalName == "c_str");
             var typePrinter = new CSharpTypePrinter(ctx.Context);
-            if (type.IsPointer() || ctx.Declaration is Field)
+            string qualifiedBasicString = GetQualifiedBasicString(basicString);
+            const string varBasicString = "__basicStringRet";
+            ctx.Before.WriteLine($@"var {varBasicString} = {
+                basicString.Visit(typePrinter)}.{Helpers.CreateInstanceIdentifier}({
+                ctx.ReturnVarName});");
+            if (type.IsAddress())
             {
-                ctx.Return.Write("{0}.{1}({2}).{3}{4}",
-                    basicString.Visit(typePrinter), Helpers.CreateInstanceIdentifier,
-                    ctx.ReturnVarName, c_str.Name, c_str is Method ? "()" : string.Empty);
+                ctx.Return.Write($@"{qualifiedBasicString}Extensions.{c_str.Name}({
+                    varBasicString})");
             }
             else
             {
-                const string varBasicString = "__basicStringRet";
-                ctx.SupportBefore.WriteLine("using (var {0} = {1}.{2}({3}))",
-                    varBasicString, basicString.Visit(typePrinter),
-                    Helpers.CreateInstanceIdentifier, ctx.ReturnVarName);
-                ctx.SupportBefore.WriteStartBraceIndent();
-                ctx.Return.Write("{0}.{1}{2}", varBasicString, c_str.Name,
-                    c_str is Method ? "()" : string.Empty);
-                ctx.HasCodeBlock = true;
+                const string varString = "__stringRet";
+                ctx.Before.WriteLine($@"var {varString} = {
+                    qualifiedBasicString}Extensions.{c_str.Name}({varBasicString});");
+                ctx.Before.WriteLine($"{varBasicString}.Dispose(false);");
+                ctx.Return.Write(varString);
             }
+        }
+
+        private static string GetQualifiedBasicString(ClassTemplateSpecialization basicString)
+        {
+            var declContext = basicString.TemplatedDecl.TemplatedDecl;
+            var names = new Stack<string>();
+            while (!(declContext is TranslationUnit))
+            {
+                var isInlineNamespace = declContext is Namespace && ((Namespace)declContext).IsInline;
+                if (!isInlineNamespace)
+                    names.Push(declContext.Name);
+                declContext = declContext.Namespace;
+            }
+            var qualifiedBasicString = string.Join(".", names);
+            return $"global::{qualifiedBasicString}";
         }
 
         private static ClassTemplateSpecialization GetBasicString(Type type)
@@ -131,7 +146,7 @@ namespace CppSharp.Types.Std
     [TypeMap("std::wstring", GeneratorKind = GeneratorKind.CLI)]
     public class WString : TypeMap
     {
-        public override string CLISignature(CLITypePrinterContext ctx)
+        public override string CLISignature(TypePrinterContext ctx)
         {
             return "System::String^";
         }
@@ -148,7 +163,7 @@ namespace CppSharp.Types.Std
                 ctx.ReturnVarName);
         }
 
-        public override string CSharpSignature(CSharpTypePrinterContext ctx)
+        public override string CSharpSignature(TypePrinterContext ctx)
         {
             return "string";
         }
@@ -185,7 +200,7 @@ namespace CppSharp.Types.Std
             }
         }
 
-        public override string CLISignature(CLITypePrinterContext ctx)
+        public override string CLISignature(TypePrinterContext ctx)
         {
             return string.Format("System::Collections::Generic::List<{0}>^",
                 ctx.GetTemplateParameterList());
@@ -208,11 +223,11 @@ namespace CppSharp.Types.Std
             var cppTypePrinter = new CppTypePrinter();
             var nativeType = type.Type.Visit(cppTypePrinter);
 
-            ctx.SupportBefore.WriteLine("auto {0} = std::vector<{1}>();",
+            ctx.Before.WriteLine("auto {0} = std::vector<{1}>();",
                 tmpVarName, nativeType);
-            ctx.SupportBefore.WriteLine("for each({0} _element in {1})",
+            ctx.Before.WriteLine("for each({0} _element in {1})",
                 managedType, entryString);
-            ctx.SupportBefore.WriteStartBraceIndent();
+            ctx.Before.WriteStartBraceIndent();
             {
                 var param = new Parameter
                 {
@@ -229,21 +244,21 @@ namespace CppSharp.Types.Std
                 var marshal = new CLIMarshalManagedToNativePrinter(elementCtx);
                 type.Type.Visit(marshal);
 
-                if (!string.IsNullOrWhiteSpace(marshal.Context.SupportBefore))
-                    ctx.SupportBefore.Write(marshal.Context.SupportBefore);
+                if (!string.IsNullOrWhiteSpace(marshal.Context.Before))
+                    ctx.Before.Write(marshal.Context.Before);
 
                 if (isPointerToPrimitive)
-                    ctx.SupportBefore.WriteLine("auto _marshalElement = {0}.ToPointer();",
+                    ctx.Before.WriteLine("auto _marshalElement = {0}.ToPointer();",
                         marshal.Context.Return);
                 else
-                    ctx.SupportBefore.WriteLine("auto _marshalElement = {0};",
+                    ctx.Before.WriteLine("auto _marshalElement = {0};",
                     marshal.Context.Return);
 
-                ctx.SupportBefore.WriteLine("{0}.push_back(_marshalElement);",
+                ctx.Before.WriteLine("{0}.push_back(_marshalElement);",
                     tmpVarName);
             }
             
-            ctx.SupportBefore.WriteCloseBraceIndent();
+            ctx.Before.WriteCloseBraceIndent();
 
             ctx.Return.Write(tmpVarName);
         }
@@ -258,12 +273,12 @@ namespace CppSharp.Types.Std
                 : type.Type;
             var tmpVarName = "_tmp" + ctx.ArgName;
             
-            ctx.SupportBefore.WriteLine(
+            ctx.Before.WriteLine(
                 "auto {0} = gcnew System::Collections::Generic::List<{1}>();",
                 tmpVarName, managedType);
-            ctx.SupportBefore.WriteLine("for(auto _element : {0})",
+            ctx.Before.WriteLine("for(auto _element : {0})",
                 ctx.ReturnVarName);
-            ctx.SupportBefore.WriteStartBraceIndent();
+            ctx.Before.WriteStartBraceIndent();
             {
                 var elementCtx = new MarshalContext(ctx.Context)
                                      {
@@ -274,27 +289,27 @@ namespace CppSharp.Types.Std
                 var marshal = new CLIMarshalNativeToManagedPrinter(elementCtx);
                 type.Type.Visit(marshal);
 
-                if (!string.IsNullOrWhiteSpace(marshal.Context.SupportBefore))
-                    ctx.SupportBefore.Write(marshal.Context.SupportBefore);
+                if (!string.IsNullOrWhiteSpace(marshal.Context.Before))
+                    ctx.Before.Write(marshal.Context.Before);
 
-                ctx.SupportBefore.WriteLine("auto _marshalElement = {0};",
+                ctx.Before.WriteLine("auto _marshalElement = {0};",
                     marshal.Context.Return);
 
                 if (isPointerToPrimitive)
-                    ctx.SupportBefore.WriteLine("{0}->Add({1}(_marshalElement));",
+                    ctx.Before.WriteLine("{0}->Add({1}(_marshalElement));",
                         tmpVarName, managedType);
                 else
-                    ctx.SupportBefore.WriteLine("{0}->Add(_marshalElement);",
+                    ctx.Before.WriteLine("{0}->Add(_marshalElement);",
                         tmpVarName);
             }
-            ctx.SupportBefore.WriteCloseBraceIndent();
+            ctx.Before.WriteCloseBraceIndent();
 
             ctx.Return.Write(tmpVarName);
         }
 
-        public override string CSharpSignature(CSharpTypePrinterContext ctx)
+        public override string CSharpSignature(TypePrinterContext ctx)
         {
-            if (ctx.CSharpKind == CSharpTypePrinterContextKind.Native)
+            if (ctx.Kind == TypePrinterContextKind.Native)
                 return "Std.Vector";
 
             return string.Format("Std.Vector<{0}>", ctx.GetTemplateParameterList());
@@ -320,7 +335,7 @@ namespace CppSharp.Types.Std
     {
         public override bool IsIgnored { get { return true; } }
 
-        public override string CLISignature(CLITypePrinterContext ctx)
+        public override string CLISignature(TypePrinterContext ctx)
         {
             var type = Type as TemplateSpecializationType;
             return string.Format(
@@ -338,9 +353,9 @@ namespace CppSharp.Types.Std
             throw new System.NotImplementedException();
         }
 
-        public override string CSharpSignature(CSharpTypePrinterContext ctx)
+        public override string CSharpSignature(TypePrinterContext ctx)
         {
-            if (ctx.CSharpKind == CSharpTypePrinterContextKind.Native)
+            if (ctx.Kind == TypePrinterContextKind.Native)
                 return "Std.Map";
 
             var type = Type as TemplateSpecializationType;
@@ -361,7 +376,7 @@ namespace CppSharp.Types.Std
     {
         public override bool IsIgnored { get { return true; } }
 
-        public override string CLISignature(CLITypePrinterContext ctx)
+        public override string CLISignature(TypePrinterContext ctx)
         {
             throw new System.NotImplementedException();
         }
@@ -377,10 +392,10 @@ namespace CppSharp.Types.Std
         }
     }
 
-    [TypeMap("std::ostream", GeneratorKind.CLI)]
+    [TypeMap("basic_ostream<char, char_traits<char>>", GeneratorKind.CLI)]
     public class OStream : TypeMap
     {
-        public override string CLISignature(CLITypePrinterContext ctx)
+        public override string CLISignature(TypePrinterContext ctx)
         {
             return "System::IO::TextWriter^";
         }
@@ -391,7 +406,7 @@ namespace CppSharp.Types.Std
             if (!ctx.Parameter.Type.Desugar().IsPointer())
                 marshal.ArgumentPrefix.Write("*");
             var marshalCtxName = string.Format("ctx_{0}", ctx.Parameter.Name);
-            ctx.SupportBefore.WriteLine("msclr::interop::marshal_context {0};", marshalCtxName);
+            ctx.Before.WriteLine("msclr::interop::marshal_context {0};", marshalCtxName);
             ctx.Return.Write("{0}.marshal_as<std::ostream*>({1})",
                 marshalCtxName, ctx.Parameter.Name);
         }
@@ -420,7 +435,7 @@ namespace CppSharp.Types.Std
     [TypeMap("FILE", GeneratorKind = GeneratorKind.CSharp)]
     public class FILE : TypeMap
     {
-        public override string CSharpSignature(CSharpTypePrinterContext ctx)
+        public override string CSharpSignature(TypePrinterContext ctx)
         {
             return CSharpTypePrinter.IntPtrType;
         }

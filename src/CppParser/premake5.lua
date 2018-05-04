@@ -6,7 +6,7 @@ clang_msvc_flags =
   "/wd4141", -- 'inline' : used more than once
 }
 
-if not (string.starts(action, "vs") and not os.is("windows")) then
+if not (string.starts(action, "vs") and not os.ishost("windows")) then
 
 project "CppSharp.CppParser"
   
@@ -15,17 +15,14 @@ project "CppSharp.CppParser"
   SetupNativeProject()
   rtti "Off"
 
-  configuration "vs*"
+  filter "action:vs*"
     buildoptions { clang_msvc_flags }
 
   if os.getenv("APPVEYOR") then
     linkoptions { "/ignore:4099" } -- LNK4099: linking object as if no debug info
   end
 
-  configuration "linux"
-    defines { "_GLIBCXX_USE_CXX11_ABI=0" }
-
-  configuration "*"
+  filter {}
   
   files
   {
@@ -33,12 +30,47 @@ project "CppSharp.CppParser"
     "*.cpp",
     "*.lua"
   }
-  
+
   SearchLLVM()
   SetupLLVMIncludes()
   SetupLLVMLibs()
   CopyClangIncludes()
   
-  configuration "*"
+  filter {}
+
+project "Std-symbols"
+
+  kind "SharedLib"
+  language "C++"
+  SetupNativeProject()
+  rtti "Off"
+
+  filter { "action:vs*" }
+    buildoptions { clang_msvc_flags }
+
+  filter {}
+
+  if os.istarget("windows") then
+      files { "Bindings/CSharp/i686-pc-win32-msvc/Std-symbols.cpp" }
+  elseif os.istarget("macosx") then
+      local file = io.popen("lipo -info `which mono`")
+      local output = file:read('*all')
+      if string.find(output, "x86_64") then
+        files { "Bindings/CSharp/x86_64-apple-darwin12.4.0/Std-symbols.cpp" }
+      else
+        files { "Bindings/CSharp/i686-apple-darwin12.4.0/Std-symbols.cpp" }
+      end
+
+  elseif os.istarget("linux") then
+      local abi = ""
+      if UseCxx11ABI() then
+          abi = "-cxx11abi"
+      end
+      files { "Bindings/CSharp/x86_64-linux-gnu"..abi.."/Std-symbols.cpp" }
+  else
+      print "Unknown architecture"
+  end
+
+  filter {}
 
 end

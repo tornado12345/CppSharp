@@ -13,7 +13,9 @@ namespace CppSharp.Passes
         public override bool VisitMethodDecl(Method method)
         {
             if (AlreadyVisited(method) || !method.IsGenerated || !method.IsConstructor ||
-                method.IsCopyConstructor)
+                method.IsCopyConstructor ||
+                // conversion operators can only be public
+                method.Access != AccessSpecifier.Public)
                 return false;
 
             var @params = method.Parameters.Where(p => p.Kind == ParameterKind.Regular).ToList();
@@ -24,9 +26,10 @@ namespace CppSharp.Passes
             {
                 var nonDefaultParams = @params.Count(p => p.DefaultArgument == null ||
                     (p.DefaultArgument.Class == StatementClass.Call &&
-                     p.DefaultArgument.Declaration.Ignore));
+                     (p.DefaultArgument.Declaration == null ||
+                      p.DefaultArgument.Declaration.Ignore)));
                 if (nonDefaultParams > 1)
-                    return false;   
+                    return false;
             }
             else
             {
@@ -34,7 +37,15 @@ namespace CppSharp.Passes
                     return false;
             }
 
+            if (method.Parameters[0].Type.IsDependentPointer())
+                return false;
+
             var parameter = method.Parameters[0];
+            Class @class;
+            var paramType = (parameter.Type.GetFinalPointee() ?? parameter.Type).Desugar();
+            if (paramType.TryGetClass(out @class) && @class == method.Namespace)
+                return false;
+
             // TODO: disable implicit operators for C++/CLI because they seem not to be support parameters
             if (!Options.IsCSharpGenerator)
             {
@@ -67,9 +78,15 @@ namespace CppSharp.Passes
                 ConversionType = qualifiedCastToType,
                 ReturnType = qualifiedCastToType,
                 OperatorKind = operatorKind,
-                IsExplicit = method.IsExplicit
+                IsExplicit = method.IsExplicit,
+                FunctionType = method.FunctionType
             };
-            conversionOperator.Parameters.Add(new Parameter(parameter) { DefaultArgument = null });
+            conversionOperator.Parameters.Add(new Parameter(parameter)
+                {
+                    Namespace = conversionOperator,
+                    DefaultArgument = null,
+                    OriginalDefaultArgument = null
+                });
             ((Class) method.Namespace).Methods.Add(conversionOperator);
             return true;
         }

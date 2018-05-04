@@ -8,6 +8,7 @@ function SetupExampleProject()
   files { "**.cs", "./*.lua" }
   links
   {
+    "CppSharp",
     "CppSharp.AST",
     "CppSharp.Generator",
     "CppSharp.Parser"
@@ -17,11 +18,11 @@ function SetupExampleProject()
   SetupParser()
 end
 
-function SetupTestProject(name, extraFiles)
+function SetupTestProject(name, extraFiles, suffix)
   SetupTestGeneratorProject(name)
-  SetupTestNativeProject(name)  
-  SetupTestProjectsCSharp(name, nil, extraFiles)
-  SetupTestProjectsCLI(name, extraFiles)
+  SetupTestNativeProject(name)
+  SetupTestProjectsCSharp(name, nil, extraFiles, suffix)
+  SetupTestProjectsCLI(name, extraFiles, suffix)
 end
 
 function SetupTestCSharp(name)
@@ -49,11 +50,14 @@ function SetupTestGeneratorProject(name, depends)
     kind "ConsoleApp"
     
     files { name .. ".cs" }
+    vpaths { ["*"] = "*" }
 
     dependson { name .. ".Native" }
 
     linktable = {
+	  "System",
       "System.Core",
+      "CppSharp",
       "CppSharp.AST",
       "CppSharp.Generator",
       "CppSharp.Generator.Tests",
@@ -69,8 +73,17 @@ function SetupTestGeneratorProject(name, depends)
     SetupParser()
 end
 
+local function get_mono_exe()
+  if target_architecture() == "x64" then
+    local _, errorcode = os.outputof("mono64")
+    return errorcode ~= 127 and "mono64" or "mono"
+  end
+  return "mono"
+end
+
 function SetupTestGeneratorBuildEvent(name)
-  local runtimeExe = os.is("windows") and "" or "mono --debug "
+  local monoExe = get_mono_exe()
+  local runtimeExe = os.ishost("windows") and "" or monoExe .. " --debug "
   if string.starts(action, "vs") then
     local exePath = SafePath("$(TargetDir)" .. name .. ".Gen.exe")
     prebuildcommands { runtimeExe .. exePath }
@@ -81,7 +94,7 @@ function SetupTestGeneratorBuildEvent(name)
 end
 
 function SetupTestNativeProject(name, depends)
-  if string.starts(action, "vs") and not os.is("windows") then
+  if string.starts(action, "vs") and not os.ishost("windows") then
     return
   end
 
@@ -93,6 +106,7 @@ function SetupTestNativeProject(name, depends)
     language "C++"
 
     files { "**.h", "**.cpp" }
+    vpaths { ["*"] = "*" }
 
     if depends ~= nil then
       links { depends .. ".Native" }
@@ -113,7 +127,14 @@ function LinkNUnit()
   }
 end
 
-function SetupTestProjectsCSharp(name, depends)
+function SetupTestProjectsCSharp(name, depends, extraFiles, suffix)
+    if suffix ~= nil then
+      nm = name .. suffix 
+      str = "Std" .. suffix
+    else
+      nm = name
+      str = "Std"
+    end
   project(name .. ".CSharp")
     SetupManagedTestProject()
 
@@ -122,9 +143,10 @@ function SetupTestProjectsCSharp(name, depends)
 
     files
     {
-      path.join(gendir, name, name .. ".cs"),
-      path.join(gendir, name, "Std.cs")
+      path.join(gendir, name, nm .. ".cs"),
+      path.join(gendir, name, str .. ".cs")
     }
+    vpaths { ["*"] = "*" }
 
     linktable = { "CppSharp.Runtime" }
 
@@ -138,6 +160,8 @@ function SetupTestProjectsCSharp(name, depends)
     SetupManagedTestProject()
 
     files { name .. ".Tests.cs" }
+    vpaths { ["*"] = "*" }
+
     links { name .. ".CSharp", "CppSharp.Generator.Tests" }
     dependson { name .. ".Native" }
 
@@ -145,8 +169,8 @@ function SetupTestProjectsCSharp(name, depends)
     links { "CppSharp.Runtime" }
 end
 
-function SetupTestProjectsCLI(name, extraFiles)
-  if not os.is("windows") then
+function SetupTestProjectsCLI(name, extraFiles, suffix)
+  if not os.ishost("windows") then
     return
   end
 
@@ -155,22 +179,32 @@ function SetupTestProjectsCLI(name, extraFiles)
 
     kind "SharedLib"
     language "C++"
-    flags { "Managed" }
+    clr "On"
 
     dependson { name .. ".Gen", name .. ".Native" }
     SetupTestGeneratorBuildEvent(name)
 
+    if (suffix ~= nil) then 
+      nm = name .. suffix
+    else
+      nm = name
+    end
+
     files
     {
-      path.join(gendir, name, name .. ".cpp"),
-      path.join(gendir, name, name .. ".h")
+      path.join(gendir, name, nm .. ".cpp"),
+      path.join(gendir, name, nm .. ".h")
     }
     if extraFiles ~= nil then
       for _, file in pairs(extraFiles) do
+        if suffix ~= nil then
+          file = file .. suffix  
+        end
         files { path.join(gendir, name, file .. ".cpp") }
         files { path.join(gendir, name, file .. ".h") }
       end
     end
+    vpaths { ["*"] = "*" }
 
     includedirs { path.join(testsdir, name), incdir }
     links { name .. ".Native" }    
@@ -179,6 +213,8 @@ function SetupTestProjectsCLI(name, extraFiles)
     SetupManagedTestProject()
 
     files { name .. ".Tests.cs" }
+    vpaths { ["*"] = "*" }
+
     links { name .. ".CLI", "CppSharp.Generator.Tests" }
     dependson { name .. ".Native" }
 

@@ -11,11 +11,6 @@ namespace CppSharp.Generator.Tests.Passes
     {
         private PassBuilder<TranslationUnitPass> passBuilder;
 
-        [TestFixtureSetUp]
-        public void Init()
-        {
-        }
-
         [SetUp]
         public void Setup()
         {
@@ -65,6 +60,20 @@ namespace CppSharp.Generator.Tests.Passes
 
             Assert.IsFalse(AstContext.Function("FooStart").IsGenerated);
             Assert.IsNotNull(c.Method("Start"));
+        }
+
+        [Test]
+        public void TestCleanCommentsPass()
+        {
+            var c = AstContext.FindClass("TestCommentsPass").FirstOrDefault();
+
+            passBuilder.AddPass(new CleanCommentsPass());
+            passBuilder.RunPasses(pass => pass.VisitDeclaration(c));
+
+            var para = (ParagraphComment)c.Comment.FullComment.Blocks[0];
+            var s = para.CommentToString(CommentKind.BCPLSlash);
+
+            Assert.That(s, Is.EqualTo("/// <summary>A simple test.</summary>"));
         }
 
         [Test]
@@ -208,7 +217,7 @@ namespace CppSharp.Generator.Tests.Passes
             Assert.AreEqual(method.Access, AccessSpecifier.Internal);
         }
 
-        private string TypePrinterDelegate(CppSharp.AST.Type type)
+        private string TypePrinterDelegate(Type type)
         {
             return type.Visit(new CSharpTypePrinter(Driver.Context)).Type;
         }

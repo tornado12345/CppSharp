@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using CppSharp.AST;
 using CppSharp.Generators;
@@ -13,12 +14,11 @@ namespace CppSharp
         {
             OutputDir = Directory.GetCurrentDirectory();
 
-            SystemModule = new Module { OutputNamespace = string.Empty, LibraryName = "Std" };
+            SystemModule = new Module("Std") { OutputNamespace = string.Empty };
             Modules = new List<Module> { SystemModule };
 
             GeneratorKind = GeneratorKind.CSharp;
             OutputInteropIncludes = true;
-            CommentPrefix = "///";
 
             Encoding = Encoding.ASCII;
 
@@ -27,71 +27,82 @@ namespace CppSharp
             ExplicitlyPatchedVirtualFunctions = new HashSet<string>();
         }
 
-        // General options
+        #region General options
+
+        /// <summary>
+        /// Set to true to enable quiet output mode.
+        /// </summary>
         public bool Quiet;
-        public bool OutputDebug;
+
+        /// <summary>
+        /// Set to true to enable verbose output mode.
+        /// </summary>
+        public bool Verbose;
 
         /// <summary>
         /// Set to true to simulate generating without actually writing
-        /// any output to disk. This can be useful to activate while
-        /// debugging the parser generator so generator bugs do not get
-        /// in the way while iterating.
+        /// any output to disk.
         /// </summary>
         public bool DryRun;
 
-        public Module SystemModule { get; private set; }
-        public List<Module> Modules { get; private set; }
+        /// <summary>
+        /// Whether the generated code should be automatically compiled.
+        /// </summary>
+        public bool CompileCode;
 
-        public Module MainModule
+        #endregion
+
+        #region Module options
+
+        public Module SystemModule { get; }
+        public List<Module> Modules { get; }
+
+        public Module AddModule(string libraryName)
         {
-            get
-            {
-                if (Modules.Count == 1)
-                    Modules.Add(new Module());
-                return Modules[1];
-            }
+            var module = new Module(libraryName);
+            Modules.Add(module);
+            return module;
         }
 
-        // Parser options
-        public List<string> Headers { get { return MainModule.Headers; } }
-        public bool IgnoreParseWarnings;
+        public bool DoAllModulesHaveLibraries() =>
+            Modules.All(m => m == SystemModule || m.Libraries.Count > 0);
 
-        // Library options
-        public List<string> Libraries { get { return MainModule.Libraries; } }
-        public bool CheckSymbols;
+        #endregion
 
-        public string SharedLibraryName
-        {
-            get { return MainModule.SharedLibraryName; }
-            set { MainModule.SharedLibraryName = value; }
-        }
+        public CompilationOptions Compilation = new CompilationOptions();
 
-        // Generator options
+        #region Generator options
+
         public GeneratorKind GeneratorKind;
 
-        public string OutputNamespace
-        {
-            get { return MainModule.OutputNamespace; }
-            set { MainModule.OutputNamespace = value; }
-        }
+        public bool CheckSymbols;
 
         public string OutputDir;
 
-        public string LibraryName
-        {
-            get { return MainModule.LibraryName; }
-            set { MainModule.LibraryName = value; }
-        }
-
         public bool OutputInteropIncludes;
         public bool GenerateFunctionTemplates;
+        /// <summary>
+        /// C# only: gets or sets a value indicating whether to generate class templates.
+        /// Still experimental - do not use in production.
+        /// </summary>
+        /// <value>
+        ///   <c>true</c> to generate class templates; otherwise, <c>false</c>.
+        /// </value>
+        public bool GenerateClassTemplates { get; set; }
         public bool GenerateInternalImports;
+        public bool GenerateSequentialLayout { get; set; }
         public bool UseHeaderDirectories;
 
         /// <summary>
+        /// If set to true, the generated code will be generated with extra
+        /// debug output.
+        /// </summary>
+        public bool GenerateDebugOutput;
+
+        /// <summary>
         /// If set to true the CLI generator will use ObjectOverridesPass to create
-        /// Equals, GetHashCode and (if the insertion operator &lt;&lt; is overloaded) ToString
-        /// methods.
+        /// Equals, GetHashCode and (if the insertion operator &lt;&lt; is overloaded)
+        /// ToString methods.
         /// </summary>
         public bool GenerateObjectOverrides;
 
@@ -99,52 +110,34 @@ namespace CppSharp
         public List<string> NoGenIncludeDirs;
 
         /// <summary>
-        /// Whether the generated C# code should be automatically compiled.
-        /// </summary>
-        public bool CompileCode;
-
-        /// <summary>
         /// Enable this option to enable generation of finalizers.
         /// Works in both CLI and C# backends.
         /// </summary>
         public bool GenerateFinalizers;
 
-        /// <summary>
-        /// If this option is off (the default), each header is parsed separately which is much slower
-        /// but safer because of a clean state of the preprocessor for each header.
-        /// </summary>
-        public bool UnityBuild { get; set; }
-
         public string IncludePrefix;
         public Func<TranslationUnit, string> GenerateName;
-        public string CommentPrefix;
+
+        /// <summary>
+        /// Set this option to the kind of comments that you want generated
+        /// in the source code. This overrides the default kind set by the
+        /// target generator.
+        /// </summary>
+        public CommentKind? CommentKind;
 
         public Encoding Encoding { get; set; }
 
-        public string InlinesLibraryName
-        {
-            get { return MainModule.InlinesLibraryName; }
-            set { MainModule.InlinesLibraryName = value; }
-        }
+        public bool IsCSharpGenerator => GeneratorKind == GeneratorKind.CSharp;
 
-        public string TemplatesLibraryName
-        {
-            get { return MainModule.TemplatesLibraryName; }
-            set { MainModule.TemplatesLibraryName = value; }
-        }
-
-        public bool IsCSharpGenerator
-        {
-            get { return GeneratorKind == GeneratorKind.CSharp; }
-        }
-
-        public bool IsCLIGenerator
-        {
-            get { return GeneratorKind == GeneratorKind.CLI; }
-        }
+        public bool IsCLIGenerator => GeneratorKind == GeneratorKind.CLI;
 
         public readonly List<string> DependentNameSpaces = new List<string>();
         public bool MarshalCharAsManagedChar { get; set; }
+
+        /// <summary>
+        /// Generates a single C# file.
+        /// </summary>
+        public bool GenerateSingleCSharpFile { get; set; } = true;
 
         /// <summary>
         /// Generates default values of arguments in the C# code.
@@ -156,7 +149,11 @@ namespace CppSharp
         /// <summary>
         /// C# end only: force patching of the virtual entries of the functions in this list.
         /// </summary>
-        public HashSet<string> ExplicitlyPatchedVirtualFunctions { get; private set; }
+        public HashSet<string> ExplicitlyPatchedVirtualFunctions { get; }
+
+        public bool UsePropertyDetectionHeuristics { get; set; } = true;
+
+        #endregion
     }
 
     public class InvalidOptionException : Exception

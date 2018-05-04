@@ -53,7 +53,13 @@ template <typename ELFT>
 ELFDumper<ELFT>::ELFDumper(const llvm::object::ELFFile<ELFT> *Obj) {
 
     llvm::SmallVector<const Elf_Phdr *, 4> LoadSegments;
-    for (const Elf_Phdr &Phdr : Obj->program_headers()) {
+    auto ProgramHeaders = Obj->program_headers();
+    if (ProgramHeaders.takeError())
+    {
+        llvm::report_fatal_error("Error reading program headers");
+        return;
+    }
+    for (const Elf_Phdr &Phdr : ProgramHeaders.get()) {
         if (Phdr.p_type == llvm::ELF::PT_DYNAMIC) {
             DynamicRegion.Addr = Obj->base() + Phdr.p_offset;
             uint64_t Size = Phdr.p_filesz;
@@ -69,7 +75,11 @@ ELFDumper<ELFT>::ELFDumper(const llvm::object::ELFFile<ELFT> *Obj) {
 
     auto toMappedAddr = [&](uint64_t VAddr) -> const uint8_t *{
         const Elf_Phdr **I = std::upper_bound(
-        LoadSegments.begin(), LoadSegments.end(), VAddr, llvm::object::compareAddr<ELFT>);
+        LoadSegments.begin(), LoadSegments.end(), VAddr,
+            [](uint64_t VAddr, const Elf_Phdr *Phdr)
+            {
+                return VAddr < Phdr->p_vaddr;
+            });
         if (I == LoadSegments.begin())
             llvm::report_fatal_error("Virtual address is not in any segment");
         --I;

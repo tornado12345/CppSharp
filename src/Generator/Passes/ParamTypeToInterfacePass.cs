@@ -1,4 +1,5 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 
@@ -6,9 +7,28 @@ namespace CppSharp.Passes
 {
     public class ParamTypeToInterfacePass : TranslationUnitPass
     {
+        public ParamTypeToInterfacePass()
+        {
+            VisitOptions.VisitClassBases = false;
+            VisitOptions.VisitClassFields = false;
+            VisitOptions.VisitEventParameters = false;
+            VisitOptions.VisitNamespaceEnums = false;
+            VisitOptions.VisitNamespaceEvents = false;
+            VisitOptions.VisitTemplateArguments = false;
+        }
+
         public override bool VisitFunctionDecl(Function function)
         {
-            if (!function.IsOperator || function.Parameters.Count > 1)
+            if (!base.VisitFunctionDecl(function))
+                return false;
+
+            // parameters and returns from a specialised interface
+            // must not be replaced if the templated interface uses a template parameter
+            Function templateInterfaceFunction = GetTemplateInterfaceFunction(function);
+
+            if ((!function.IsOperator || function.Parameters.Count > 1) &&
+                (templateInterfaceFunction == null ||
+                 !IsTemplateParameter(templateInterfaceFunction.OriginalReturnType)))
             {
                 var originalReturnType = function.OriginalReturnType;
                 ChangeToInterfaceType(ref originalReturnType);
@@ -17,32 +37,99 @@ namespace CppSharp.Passes
 
             if (function.OperatorKind != CXXOperatorKind.Conversion &&
                 function.OperatorKind != CXXOperatorKind.ExplicitConversion)
-                foreach (var parameter in function.Parameters.Where(p => p.Kind != ParameterKind.OperatorParameter))
-                {
-                    var qualifiedType = parameter.QualifiedType;
-                    ChangeToInterfaceType(ref qualifiedType);
-                    parameter.QualifiedType = qualifiedType;
-                }
+            {
+                IList<Parameter> parameters = function.Parameters.Where(
+                    p => p.Kind != ParameterKind.OperatorParameter &&
+                        p.Kind != ParameterKind.IndirectReturnType).ToList();
 
-            return base.VisitFunctionDecl(function);
+                var templateFunctionParameters = new List<Parameter>();
+                if (templateInterfaceFunction != null)
+                    templateFunctionParameters.AddRange(
+                        templateInterfaceFunction.Parameters.Where(
+                            p => p.Kind != ParameterKind.OperatorParameter &&
+                                p.Kind != ParameterKind.IndirectReturnType));
+                for (int i = 0; i < parameters.Count; i++)
+                {
+                    if (templateFunctionParameters.Any() &&
+                        IsTemplateParameter(templateFunctionParameters[i].QualifiedType))
+                        continue;
+                    var qualifiedType = parameters[i].QualifiedType;
+                    ChangeToInterfaceType(ref qualifiedType);
+                    parameters[i].QualifiedType = qualifiedType;
+                }
+            }
+
+            return true;
+        }
+
+        public override bool VisitProperty(Property property)
+        {
+            if (!base.VisitProperty(property))
+                return false;
+
+            var templateInterfaceProperty = GetTemplateInterfaceProperty(property);
+
+            if (templateInterfaceProperty != null &&
+                IsTemplateParameter(templateInterfaceProperty.QualifiedType))
+                return false;
+
+            var type = property.QualifiedType;
+            ChangeToInterfaceType(ref type);
+            property.QualifiedType = type;
+            return true;
+        }
+
+        private static Function GetTemplateInterfaceFunction(Function function)
+        {
+            Function templateInterfaceFunction = null;
+            Class @class = function.OriginalNamespace as Class;
+            if (@class != null && @class.IsInterface)
+                templateInterfaceFunction = @class.Methods.First(
+                   m => m.OriginalFunction == function.OriginalFunction).InstantiatedFrom;
+            return templateInterfaceFunction;
+        }
+
+        private static Property GetTemplateInterfaceProperty(Property property)
+        {
+            if (property.GetMethod != null &&
+                property.GetMethod.SynthKind == FunctionSynthKind.InterfaceInstance)
+                return null;
+
+            Property templateInterfaceProperty = null;
+            Class @class = property.OriginalNamespace as Class;
+            if (@class != null && @class.IsInterface)
+            {
+                var specialization = @class as ClassTemplateSpecialization;
+                if (specialization != null)
+                {
+                    Class template = specialization.TemplatedDecl.TemplatedClass;
+                    templateInterfaceProperty = template.Properties.FirstOrDefault(
+                        p => p.Name == property.Name);
+                }
+            }
+
+            return templateInterfaceProperty;
+        }
+
+        private static bool IsTemplateParameter(QualifiedType type)
+        {
+            return (type.Type.Desugar().GetFinalPointee() ?? type.Type).Desugar() is TemplateParameterType;
         }
 
         private static void ChangeToInterfaceType(ref QualifiedType type)
         {
-            var tagType = (type.Type.GetFinalPointee() ?? type.Type) as TagType;
-            if (tagType != null)
-            {
-                var @class = tagType.Declaration as Class;
-                if (@class != null)
-                {
-                    var @interface = @class.Namespace.Classes.Find(c => c.OriginalClass == @class);
-                    if (@interface != null)
-                    {
-                        type.Type = (Type) type.Type.Clone();
-                        ((TagType) (type.Type.GetFinalPointee() ?? type.Type)).Declaration = @interface;
-                    }
-                }
-            }
+            var finalType = (type.Type.GetFinalPointee() ?? type.Type).Desugar();
+            Class @class;
+            if (!finalType.TryGetClass(out @class))
+                return;
+
+            Class @interface = @class.GetInterface();
+            if (@interface == null)
+                return;
+
+            type.Type = (Type) type.Type.Clone();
+            finalType = (type.Type.GetFinalPointee() ?? type.Type).Desugar();
+            finalType.TryGetClass(out @class, @interface);
         }
     }
 }

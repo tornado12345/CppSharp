@@ -16,11 +16,13 @@
 #include <clang/AST/Type.h>
 #include <clang/Basic/TargetInfo.h>
 #include <clang/Frontend/CompilerInstance.h>
+#include <clang/Sema/Scope.h>
 
 #include "CXXABI.h"
 #include "CppParser.h"
 
 #include <string>
+#include <unordered_set>
 
 namespace clang {
   namespace CodeGen {
@@ -47,21 +49,16 @@ class Parser
 public:
     Parser(CppParserOptions* Opts);
 
-    void SetupHeader();
-    ParserResult* ParseHeader(const std::vector<std::string>& SourceFiles, ParserResult* res);
-    ParserResult* ParseLibrary(const std::string& File, ParserResult* res);
-    ParserResultKind ParseArchive(llvm::StringRef File,
-                                  llvm::object::Archive* Archive,
-                                  CppSharp::CppParser::NativeLibrary*& NativeLib);
-    ParserResultKind ParseSharedLib(llvm::StringRef File,
-                                    llvm::object::ObjectFile* ObjectFile,
-                                    CppSharp::CppParser::NativeLibrary*& NativeLib);
-    ParserTargetInfo*  GetTargetInfo();
+    void Setup();
+    ParserResult* ParseHeader(const std::vector<std::string>& SourceFiles);
+    ParserResult* ParseLibrary(const std::string& File);
 
 private:
+    bool IsSupported(const clang::NamedDecl* ND);
+    bool IsSupported(const clang::CXXMethodDecl* MD);
     // AST traversers
     void WalkAST();
-    Declaration* WalkDeclaration(const clang::Decl* D, bool CanBeDefinition = false);
+    Declaration* WalkDeclaration(const clang::Decl* D);
     Declaration* WalkDeclarationDef(clang::Decl* D);
     Enumeration* WalkEnum(const clang::EnumDecl* ED);
 	Enumeration::Item* WalkEnumItem(clang::EnumConstantDecl* ECD);
@@ -84,8 +81,7 @@ private:
     void WalkVariable(const clang::VarDecl* VD, Variable* Var);
     Friend* WalkFriend(const clang::FriendDecl* FD);
     RawComment* WalkRawComment(const clang::RawComment* RC);
-    bool ShouldCompleteType(const clang::QualType& QualType, bool LocValid);
-    Type* WalkType(clang::QualType QualType, clang::TypeLoc* TL = 0,
+    Type* WalkType(clang::QualType QualType, const clang::TypeLoc* TL = 0,
       bool DesugarType = false);
     TemplateArgument WalkTemplateArgument(const clang::TemplateArgument& TA, clang::TemplateArgumentLoc* ArgLoc);
     TemplateTemplateParameter* WalkTemplateTemplateParameter(const clang::TemplateTemplateParmDecl* TTP);
@@ -100,18 +96,20 @@ private:
     WalkVarTemplateSpecialization(const clang::VarTemplateSpecializationDecl* VTS);
     VarTemplatePartialSpecialization*
     WalkVarTemplatePartialSpecialization(const clang::VarTemplatePartialSpecializationDecl* VTS);
-    std::vector<TemplateArgument> WalkTemplateArgumentList(const clang::TemplateArgumentList* TAL, clang::TemplateSpecializationTypeLoc* TSTL);
+    template<typename TypeLoc>
+    std::vector<TemplateArgument> WalkTemplateArgumentList(const clang::TemplateArgumentList* TAL, TypeLoc* TSTL);
     std::vector<TemplateArgument> WalkTemplateArgumentList(const clang::TemplateArgumentList* TAL, const clang::ASTTemplateArgumentListInfo* TSTL);
     void WalkVTable(const clang::CXXRecordDecl* RD, Class* C);
-    QualifiedType GetQualifiedType(const clang::QualType& qual, clang::TypeLoc* TL = 0);
+    QualifiedType GetQualifiedType(const clang::QualType& qual, const clang::TypeLoc* TL = 0);
     void ReadClassLayout(Class* Class, const clang::RecordDecl* RD, clang::CharUnits Offset, bool IncludeVirtualBases);
     LayoutField WalkVTablePointer(Class* Class, const clang::CharUnits& Offset, const std::string& prefix);
     VTableLayout WalkVTableLayout(const clang::VTableLayout& VTLayout);
     VTableComponent WalkVTableComponent(const clang::VTableComponent& Component);
     PreprocessedEntity* WalkPreprocessedEntity(Declaration* Decl,
         clang::PreprocessedEntity* PPEntity);
-    AST::Expression* WalkExpression(clang::Expr* Expression);
+    AST::Expression* WalkExpression(const clang::Expr* Expression);
     std::string GetStringFromStatement(const clang::Stmt* Statement);
+    std::string GetFunctionBody(const clang::FunctionDecl* FD);
 
     // Clang helpers
     SourceLocationKind GetLocationKind(const clang::SourceLocation& Loc);
@@ -119,6 +117,12 @@ private:
     std::string GetDeclMangledName(const clang::Decl* D);
     std::string GetTypeName(const clang::Type* Type);
     bool CanCheckCodeGenInfo(clang::Sema & S, const clang::Type * Ty);
+    void CompleteIfSpecializationType(const clang::QualType& QualType);
+    Parameter* WalkParameter(const clang::ParmVarDecl* PVD,
+        const clang::SourceLocation& ParamStartLoc);
+    void SetBody(const clang::FunctionDecl* FD, Function* F);
+    std::stack<clang::Scope> GetScopesFor(clang::FunctionDecl* FD);
+    void MarkValidity(Function* F);
     void WalkFunction(const clang::FunctionDecl* FD, Function* F,
         bool IsDependent = false);
     void HandlePreprocessedEntities(Declaration* Decl);
@@ -138,19 +142,27 @@ private:
     void HandleComments(const clang::Decl* D, Declaration* Decl);
     void HandleDiagnostics(ParserResult* res);
 
-    int Index;
-    ASTContext* Lib;
-    CppParserOptions* Opts;
-    std::unique_ptr<clang::CompilerInstance> C;
-    clang::ASTContext* AST;
-    clang::TargetCXXABI::Kind TargetABI;
-    clang::CodeGen::CodeGenTypes* CodeGenTypes;
-
     ParserResultKind ReadSymbols(llvm::StringRef File,
                                  llvm::object::basic_symbol_iterator Begin,
                                  llvm::object::basic_symbol_iterator End,
                                  CppSharp::CppParser::NativeLibrary*& NativeLib);
     Declaration* GetDeclarationFromFriend(clang::NamedDecl* FriendDecl);
+    ParserResultKind ParseArchive(llvm::StringRef File,
+        llvm::object::Archive* Archive, CppSharp::CppParser::NativeLibrary*& NativeLib);
+    ParserResultKind ParseSharedLib(llvm::StringRef File,
+        llvm::object::ObjectFile* ObjectFile, CppSharp::CppParser::NativeLibrary*& NativeLib);
+    ParserTargetInfo* GetTargetInfo();
+
+    int index;
+    CppParserOptions* opts;
+    std::unique_ptr<clang::CompilerInstance> c;
+    clang::TargetCXXABI::Kind targetABI;
+    clang::CodeGen::CodeGenTypes* codeGenTypes;
+    std::unordered_map<const clang::TemplateTypeParmDecl*, TypeTemplateParameter*> walkedTypeTemplateParameters;
+    std::unordered_map<const clang::TemplateTemplateParmDecl*, TemplateTemplateParameter*> walkedTemplateTemplateParameters;
+    std::unordered_map<const clang::NonTypeTemplateParmDecl*, NonTypeTemplateParameter*> walkedNonTypeTemplateParameters;
+    std::unordered_map<const clang::ParmVarDecl*, Parameter*> walkedParameters;
+    std::unordered_set<std::string> supportedStdTypes;
 };
 
 } }

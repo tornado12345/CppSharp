@@ -6,12 +6,12 @@ namespace CppSharp.AST
 {
     public static class FunctionExtensions
     {
-        public static IEnumerable<Parameter> GatherInternalParams(this Function function,
+        public static IList<Parameter> GatherInternalParams(this Function function,
             bool isItaniumLikeAbi, bool universalDelegate = false)
         {
             var @params = new List<Parameter>();
 
-            var method = function as Method;
+            var method = (function.OriginalFunction ?? function) as Method;
             var isInstanceMethod = method != null && !method.IsStatic;
 
             var pointer = new QualifiedType(new PointerType(new QualifiedType(new BuiltinType(PrimitiveType.Void))));
@@ -21,7 +21,8 @@ namespace CppSharp.AST
                 @params.Add(new Parameter
                     {
                         QualifiedType = pointer,
-                        Name = "instance"
+                        Name = "instance",
+                        Namespace = function
                     });
             }
 
@@ -31,12 +32,14 @@ namespace CppSharp.AST
                 @params.Add(new Parameter
                     {
                         QualifiedType = pointer,
-                        Name = "instance"
+                        Name = "instance",
+                        Namespace = function
                     });
             }
 
             var i = 0;
-            foreach (var param in function.Parameters.Where(p => p.Kind != ParameterKind.OperatorParameter))
+            foreach (var param in function.Parameters.Where(
+                p => p.Kind != ParameterKind.OperatorParameter && p.Kind != ParameterKind.Extension))
             {
                 @params.Add(new Parameter
                     {
@@ -44,7 +47,8 @@ namespace CppSharp.AST
                             pointer : param.QualifiedType,
                         Kind = param.Kind,
                         Usage = param.Usage,
-                        Name = universalDelegate ? "arg" + ++i : param.Name
+                        Name = universalDelegate ? $"arg{++i}": param.Name,
+                        Namespace = param.Namespace
                     });
 
                 if (param.Kind == ParameterKind.IndirectReturnType &&
@@ -53,7 +57,8 @@ namespace CppSharp.AST
                     @params.Add(new Parameter
                         {
                             QualifiedType = pointer,
-                            Name = "instance"
+                            Name = "instance",
+                            Namespace = function
                         });
                 }
             }
@@ -66,7 +71,8 @@ namespace CppSharp.AST
                     @params.Add(new Parameter
                         {
                             QualifiedType = new QualifiedType(new BuiltinType(PrimitiveType.Int)),
-                            Name = "__forBases"
+                            Name = "__forBases",
+                            Namespace = function
                         });
                 }
             }
@@ -74,11 +80,23 @@ namespace CppSharp.AST
             return @params;
         }
 
+        public static bool IsGeneratedOverride(this Method method)
+        {
+            // Check if overriding a function from a secondary base.
+            var @class = method.Namespace as Class;
+            Method rootBaseMethod;
+            return method.IsOverride &&
+                (rootBaseMethod = @class.GetBaseMethod(method)) != null &&
+                rootBaseMethod.IsGenerated && rootBaseMethod.IsVirtual;
+        }
+
         public static bool CanOverride(this Method @override, Method method)
         {
             return (method.OriginalName == @override.OriginalName &&
                 method.OriginalReturnType.ResolvesTo(@override.OriginalReturnType) &&
-                method.Parameters.SequenceEqual(@override.Parameters, ParameterTypeComparer.Instance)) ||
+                method.Parameters.Where(p => p.Kind != ParameterKind.IndirectReturnType).SequenceEqual(
+                    @override.Parameters.Where(p => p.Kind != ParameterKind.IndirectReturnType),
+                    ParameterTypeComparer.Instance)) ||
                 (@override.IsDestructor && method.IsDestructor && method.IsVirtual);
         }
     }

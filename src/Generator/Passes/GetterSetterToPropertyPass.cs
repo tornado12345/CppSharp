@@ -15,17 +15,18 @@ namespace CppSharp.Passes
     {
         private class PropertyGenerator
         {
-            private readonly IDiagnostics Diagnostics;
             private readonly List<Method> getters = new List<Method>();
             private readonly List<Method> setters = new List<Method>();
             private readonly List<Method> setMethods = new List<Method>();
             private readonly List<Method> nonSetters = new List<Method>();
+            private bool useHeuristics = true;
 
-            public PropertyGenerator(Class @class, IDiagnostics diags)
+            public PropertyGenerator(Class @class, bool useHeuristics)
             {
-                Diagnostics = diags;
+                this.useHeuristics = useHeuristics;
                 foreach (var method in @class.Methods.Where(
-                    m => !m.IsConstructor && !m.IsDestructor && !m.IsOperator && m.IsGenerated))
+                    m => !m.IsConstructor && !m.IsDestructor && !m.IsOperator && m.IsGenerated &&
+                         !m.ExcludeFromPasses.Contains(typeof(GetterSetterToPropertyPass))))
                     DistributeMethod(method);
             }
 
@@ -51,7 +52,13 @@ namespace CppSharp.Passes
                 {
                     var type = (Class) setter.Namespace;
                     var firstWord = GetFirstWord(setter.Name);
-                    var nameBuilder = new StringBuilder(setter.Name.Substring(firstWord.Length));
+                    string property;
+                    if ((firstWord == "set" || firstWord == "set_") &&
+                        firstWord.Length < setter.Name.Length)
+                        property = setter.Name.Substring(firstWord.Length);
+                    else
+                        property = setter.Name;
+                    var nameBuilder = new StringBuilder(property);
                     if (char.IsLower(setter.Name[0]))
                         nameBuilder[0] = char.ToLowerInvariant(nameBuilder[0]);
                     string afterSet = nameBuilder.ToString();
@@ -79,8 +86,7 @@ namespace CppSharp.Passes
                                     char.ToUpperInvariant(@event.Name[0]), @event.Name.Substring(1));
                                 Diagnostics.Debug("Event {0}::{1} renamed to {2}", @event.Namespace.Name, oldName, @event.Name);
                             }
-                            getter.Name = name;
-                            GenerateProperty(getter.Namespace, getter, readOnly ? null : setter);
+                            GenerateProperty(name, getter.Namespace, getter, readOnly ? null : setter);
                             goto next;
                         }
                     }
@@ -88,7 +94,8 @@ namespace CppSharp.Passes
                     if (!type.IsInterface && baseProperty != null && baseProperty.IsVirtual && setter.IsVirtual)
                     {
                         bool isReadOnly = baseProperty.SetMethod == null;
-                        GenerateProperty(setter.Namespace, baseProperty.GetMethod,
+                        var name = GetReadWritePropertyName(baseProperty.GetMethod, afterSet);
+                        GenerateProperty(name, setter.Namespace, baseProperty.GetMethod,
                             readOnly || isReadOnly ? null : setter);
                     }
                 next:
@@ -135,8 +142,12 @@ namespace CppSharp.Passes
 
             private static void GenerateProperty(DeclarationContext context, Method getter, Method setter = null)
             {
+                GenerateProperty(GetPropertyName(getter.Name), context, getter, setter);
+            }
+
+            private static void GenerateProperty(string name, DeclarationContext context, Method getter, Method setter)
+            {
                 var type = (Class) context;
-                var name = GetPropertyName(getter.Name);
                 if (type.Properties.Any(p => p.Name == name &&
                     p.ExplicitInterfaceImpl == getter.ExplicitInterfaceImpl))
                     return;
@@ -154,10 +165,6 @@ namespace CppSharp.Passes
                 if (getter.IsOverride || (setter != null && setter.IsOverride))
                 {
                     var baseVirtualProperty = type.GetBaseProperty(property, getTopmost: true);
-                    if (baseVirtualProperty == null && type.GetBaseMethod(getter, getTopmost: true).IsGenerated)
-                        throw new Exception(string.Format(
-                            "Property {0} has a base property null but its getter has a generated base method.",
-                            getter.QualifiedOriginalName));
                     if (baseVirtualProperty != null && !baseVirtualProperty.IsVirtual)
                     {
                         // the only way the above can happen is if we are generating properties in abstract implementations
@@ -168,7 +175,7 @@ namespace CppSharp.Passes
                             "Base of property {0} is not virtual while the getter is.",
                             getter.QualifiedOriginalName));
                     }
-                    if (baseVirtualProperty != null && baseVirtualProperty.SetMethod == null)
+                    if (baseVirtualProperty == null || baseVirtualProperty.SetMethod == null)
                         setter = null;
                 }
                 property.GetMethod = getter;
@@ -243,9 +250,10 @@ namespace CppSharp.Passes
 
             private void DistributeMethod(Method method)
             {
-                var firstWord = GetFirstWord(method.Name);
-                if (Match(firstWord, new[] { "set" }) && method.Name.Length > firstWord.Length &&
-                    method.OriginalReturnType.Type.IsPrimitiveType(PrimitiveType.Void))
+                Type returnType = method.OriginalReturnType.Type.Desugar();
+                if ((returnType.IsPrimitiveType(PrimitiveType.Void) ||
+                     returnType.IsPrimitiveType(PrimitiveType.Bool)) &&
+                     method.Parameters.Any(p => p.Kind == ParameterKind.Regular))
                 {
                     if (method.Parameters.Count == 1)
                         setters.Add(method);
@@ -254,23 +262,28 @@ namespace CppSharp.Passes
                 }
                 else
                 {
-                    if (IsGetter(method))
+                    if (method.ConvertToProperty || IsGetter(method))
                         getters.Add(method);
                     if (method.Parameters.All(p => p.Kind == ParameterKind.IndirectReturnType))
                         nonSetters.Add(method);
                 }
             }
 
-            private static bool IsGetter(Method method)
+            private bool IsGetter(Method method)
             {
                 if (method.IsDestructor ||
                     (method.OriginalReturnType.Type.IsPrimitiveType(PrimitiveType.Void)) ||
                     method.Parameters.Any(p => p.Kind != ParameterKind.IndirectReturnType))
                     return false;
                 var firstWord = GetFirstWord(method.Name);
-                return (firstWord.Length < method.Name.Length &&
-                    Match(firstWord, new[] { "get", "is", "has" })) ||
-                    (!Match(firstWord, new[] { "to", "new" }) && !verbs.Contains(firstWord));
+
+                if (firstWord.Length < method.Name.Length && Match(firstWord, new[] {"get", "is", "has"}))
+                    return true;
+
+                if (useHeuristics && !Match(firstWord, new[] {"to", "new"}) && !verbs.Contains(firstWord))
+                    return true;
+
+                return false;
             }
 
             private static bool Match(string prefix, IEnumerable<string> prefixes)
@@ -310,14 +323,9 @@ namespace CppSharp.Passes
 
         private static void LoadVerbs()
         {
-            var assembly = Assembly.GetExecutingAssembly();
+            var assembly = Assembly.GetAssembly(typeof(GetterSetterToPropertyPass));
             using (var resourceStream = GetResourceStream(assembly))
             {
-                // For some reason, embedded resources are not working when compiling the
-                // Premake-generated VS project files with xbuild under OSX. Workaround this for now.
-                if (resourceStream == null)
-                    return;
-
                 using (var streamReader = new StreamReader(resourceStream))
                     while (!streamReader.EndOfStream)
                         verbs.Add(streamReader.ReadLine());
@@ -326,16 +334,23 @@ namespace CppSharp.Passes
 
         private static Stream GetResourceStream(Assembly assembly)
         {
-            var stream = assembly.GetManifestResourceStream("CppSharp.Generator.Passes.verbs.txt");
-            // HACK: a bug in premake for OS X causes resources to be embedded with an incorrect location
-            return stream ?? assembly.GetManifestResourceStream("verbs.txt");
-        }
+            var resources = assembly.GetManifestResourceNames();
 
+            if (resources.Count() == 0)
+                throw new Exception("Cannot find embedded verbs data resource.");
+
+            // We are relying on this fact that there is only one resource embedded.
+            // Before we loaded the resource by name but found out that naming was
+            // different between different platforms and/or build systems.
+            return assembly.GetManifestResourceStream(resources[0]);
+        }
 
         public GetterSetterToPropertyPass()
         {
+            VisitOptions.VisitClassBases = false;
             VisitOptions.VisitClassFields = false;
             VisitOptions.VisitClassProperties = false;
+            VisitOptions.VisitClassMethods = false;
             VisitOptions.VisitNamespaceEnums = false;
             VisitOptions.VisitNamespaceTemplates = false;
             VisitOptions.VisitNamespaceTypedefs = false;
@@ -347,15 +362,8 @@ namespace CppSharp.Passes
 
         public override bool VisitClassDecl(Class @class)
         {
-            if (VisitDeclarationContext(@class))
-            {
-                if (VisitOptions.VisitClassBases)
-                    foreach (var baseClass in @class.Bases)
-                        if (baseClass.IsClass)
-                            VisitClassDecl(baseClass.Class);
-
-                new PropertyGenerator(@class, Diagnostics).GenerateProperties();
-            }
+            if (base.VisitClassDecl(@class))
+                new PropertyGenerator(@class, Options.UsePropertyDetectionHeuristics).GenerateProperties();
             return false;
         }
     }

@@ -9,34 +9,55 @@ namespace CppSharp.Generators.CSharp
 {
     public static class CSharpCommentPrinter
     {
-        public static string CommentToString(this Comment comment, string commentPrefix)
+        public static string CommentToString(this Comment comment, CommentKind kind)
         {
             var sections = new List<Section> { new Section(CommentElement.Summary) };
             GetCommentSections(comment, sections);
             foreach (var section in sections)
                 TrimSection(section);
-            return FormatComment(sections, commentPrefix);
+            return FormatComment(sections, kind);
         }
 
         private static void GetCommentSections(this Comment comment, List<Section> sections)
         {
             switch (comment.Kind)
             {
-                case CommentKind.FullComment:
+                case DocumentationCommentKind.FullComment:
                     var fullComment = (FullComment) comment;
                     foreach (var block in fullComment.Blocks)
                         block.GetCommentSections(sections);
                     break;
-                case CommentKind.BlockCommandComment:
+                case DocumentationCommentKind.BlockCommandComment:
                     var blockCommandComment = (BlockCommandComment) comment;
-                    if (blockCommandComment.CommandKind == CommentCommandKind.Return &&
-                        blockCommandComment.ParagraphComment != null)
+                    if (blockCommandComment.ParagraphComment == null)
+                        break;
+                    switch (blockCommandComment.CommandKind)
                     {
-                        sections.Add(new Section(CommentElement.Returns));
-                        blockCommandComment.ParagraphComment.GetCommentSections(sections);
+                        case CommentCommandKind.Brief:
+                            blockCommandComment.ParagraphComment.GetCommentSections(sections);
+                            break;
+                        case CommentCommandKind.Return:
+                            sections.Add(new Section(CommentElement.Returns));
+                            blockCommandComment.ParagraphComment.GetCommentSections(sections);
+                            break;
+                        case CommentCommandKind.Since:
+                            var lastBlockSection = sections.Last();
+                            foreach (var inlineContentComment in blockCommandComment.ParagraphComment.Content)
+                            {
+                                inlineContentComment.GetCommentSections(sections);
+                                if (inlineContentComment.HasTrailingNewline)
+                                    lastBlockSection.NewLine();
+                            }
+                            break;
+                        default:
+                            sections.Add(new Section(CommentElement.Remarks));
+                            blockCommandComment.ParagraphComment.GetCommentSections(sections);
+                            break;
                     }
+
+
                     break;
-                case CommentKind.ParamCommandComment:
+                case DocumentationCommentKind.ParamCommandComment:
                     var paramCommandComment = (ParamCommandComment) comment;
                     var param = new Section(CommentElement.Param);
                     sections.Add(param);
@@ -45,44 +66,66 @@ namespace CppSharp.Generators.CSharp
                             string.Format("name=\"{0}\"", paramCommandComment.Arguments[0].Text));
                     if (paramCommandComment.ParagraphComment != null)
                         foreach (var inlineContentComment in paramCommandComment.ParagraphComment.Content)
+                        {
                             inlineContentComment.GetCommentSections(sections);
+                            if (inlineContentComment.HasTrailingNewline)
+                                sections.Last().NewLine();
+                        }
+                    if (!string.IsNullOrEmpty(sections.Last().CurrentLine.ToString()))
+                        sections.Add(new Section(CommentElement.Remarks));
                     break;
-                case CommentKind.TParamCommandComment:
+                case DocumentationCommentKind.TParamCommandComment:
                     break;
-                case CommentKind.VerbatimBlockComment:
+                case DocumentationCommentKind.VerbatimBlockComment:
                     break;
-                case CommentKind.VerbatimLineComment:
+                case DocumentationCommentKind.VerbatimLineComment:
                     break;
-                case CommentKind.ParagraphComment:
+                case DocumentationCommentKind.ParagraphComment:
                     var summaryParagraph = sections.Count == 1;
                     var paragraphComment = (ParagraphComment) comment;
+                    var lastParagraphSection = sections.Last();
                     foreach (var inlineContentComment in paragraphComment.Content)
-                        inlineContentComment.GetCommentSections(sections);
-                    if (summaryParagraph)
                     {
-                        sections[0].Lines.AddRange(sections.Skip(1).SelectMany(s => s.Lines));
+                        inlineContentComment.GetCommentSections(sections);
+                        if (inlineContentComment.HasTrailingNewline)
+                            lastParagraphSection.NewLine();
+                    }
+
+                    if (!string.IsNullOrEmpty(lastParagraphSection.CurrentLine.ToString()))
+                        lastParagraphSection.NewLine();
+
+                    if (sections[0].GetLines().Count > 0 && summaryParagraph)
+                    {
+                        sections[0].GetLines().AddRange(sections.Skip(1).SelectMany(s => s.GetLines()));
                         sections.RemoveRange(1, sections.Count - 1);
                         sections.Add(new Section(CommentElement.Remarks));
                     }
                     break;
-                case CommentKind.HTMLTagComment:
+                case DocumentationCommentKind.HTMLTagComment:
                     break;
-                case CommentKind.HTMLStartTagComment:
+                case DocumentationCommentKind.HTMLStartTagComment:
                     break;
-                case CommentKind.HTMLEndTagComment:
+                case DocumentationCommentKind.HTMLEndTagComment:
                     break;
-                case CommentKind.TextComment:
-                    var section = sections.Last();
-                    section.Lines.Add(GetText(comment,
-                        section.Type == CommentElement.Returns || section.Type == CommentElement.Param));
-                    if (sections.Count == 1)
-                        sections.Add(new Section(CommentElement.Remarks));
+                case DocumentationCommentKind.TextComment:
+                    var lastTextsection = sections.Last();
+                    lastTextsection.CurrentLine.Append(GetText(comment,
+                        lastTextsection.Type == CommentElement.Returns ||
+                        lastTextsection.Type == CommentElement.Param).Trim());
                     break;
-                case CommentKind.InlineContentComment:
+                case DocumentationCommentKind.InlineContentComment:
                     break;
-                case CommentKind.InlineCommandComment:
+                case DocumentationCommentKind.InlineCommandComment:
+                    var lastInlineSection = sections.Last();
+                    var inlineCommand = (InlineCommandComment) comment;
+
+                    if (inlineCommand.CommandKind == CommentCommandKind.B)
+                    {
+                        var argText = $" <c>{inlineCommand.Arguments[0].Text}</c> ";
+                        lastInlineSection.CurrentLine.Append(argText);
+                    }
                     break;
-                case CommentKind.VerbatimBlockLineComment:
+                case DocumentationCommentKind.VerbatimBlockLineComment:
                     break;
             }
         }
@@ -93,45 +136,65 @@ namespace CppSharp.Generators.CSharp
             var text = textComment.Text;
             if (trim)
                 text = text.Trim();
+
+            if (Helpers.RegexTag.IsMatch(text))
+                return String.Empty;
+
             return HtmlEncoder.HtmlEncode(
                 text.Length > 1 && text[0] == ' ' && text[1] != ' ' ? text.Substring(1) : text);
         }
 
         private static void TrimSection(Section section)
         {
-            for (int i = 0; i < section.Lines.Count - 1; i++)
+            var lines = section.GetLines();
+            for (int i = 0; i < lines.Count - 1; i++)
             {
-                if (string.IsNullOrWhiteSpace(section.Lines[i]))
-                    section.Lines.RemoveAt(i--);
+                if (string.IsNullOrWhiteSpace(lines[i]))
+                    lines.RemoveAt(i--);
                 else
                     break;
             }
-            for (int i = section.Lines.Count - 1; i >= 0; i--)
+            for (int i = lines.Count - 1; i >= 0; i--)
             {
-                if (string.IsNullOrWhiteSpace(section.Lines[i]))
-                    section.Lines.RemoveAt(i);
+                if (string.IsNullOrWhiteSpace(lines[i]))
+                    lines.RemoveAt(i);
                 else
                     break;
             }
         }
 
-        private static string FormatComment(List<Section> sections, string commentPrefix)
+        private static string FormatComment(List<Section> sections, CommentKind kind)
         {
+            var commentPrefix = Comment.GetMultiLineCommentPrologue(kind);
             var commentBuilder = new StringBuilder();
-            foreach (var section in sections.Where(s => s.Lines.Count > 0))
+
+            sections.Sort((x, y) => x.Type.CompareTo(y.Type));
+            var remarks = sections.Where(s => s.Type == CommentElement.Remarks).ToList();
+            if (remarks.Any())
+                remarks.First().GetLines().AddRange(remarks.Skip(1).SelectMany(s => s.GetLines()));
+            if (remarks.Count > 1)
+                sections.RemoveRange(sections.IndexOf(remarks.First()) + 1, remarks.Count - 1);
+
+            foreach (var section in sections.Where(s => s.HasLines))
             {
+                var lines = section.GetLines();
                 var tag = section.Type.ToString().ToLowerInvariant();
-                commentBuilder.AppendFormat("{0} <{1}{2}>", commentPrefix,
-                    tag + (section.Attributes.Count == 0 ? string.Empty : " "),
-                    string.Join(" ", section.Attributes));
-                commentBuilder.AppendLine();
-                foreach (var line in section.Lines)
+                var attributes = string.Empty;
+                if (section.Attributes.Any())
+                    attributes = ' ' + string.Join(" ", section.Attributes);
+                commentBuilder.Append($"{commentPrefix} <{tag}{attributes}>");
+                if (lines.Count == 1)
                 {
-                    commentBuilder.AppendFormat("{0} <para>{1}</para>", commentPrefix, line);
-                    commentBuilder.AppendLine();
+                    commentBuilder.Append(lines[0]);
                 }
-                commentBuilder.AppendFormat("{0} </{1}>", commentPrefix, tag);
-                commentBuilder.AppendLine();
+                else
+                {
+                    commentBuilder.AppendLine();
+                    foreach (var line in lines)
+                        commentBuilder.AppendLine($"{commentPrefix} <para>{line}</para>");
+                    commentBuilder.Append($"{commentPrefix} ");
+                }
+                commentBuilder.AppendLine($"</{tag}>");
             }
             if (commentBuilder.Length > 0)
             {
@@ -146,23 +209,41 @@ namespace CppSharp.Generators.CSharp
             public Section(CommentElement type)
             {
                 Type = type;
-                Attributes = new List<string>();
-                Lines = new List<string>();
             }
+
+            public StringBuilder CurrentLine { get; set; } = new StringBuilder();
 
             public CommentElement Type { get; set; }
 
-            public List<string> Attributes { get; set; }
+            public List<string> Attributes { get; } = new List<string>();
 
-            public List<string> Lines { get; private set; }
+            private List<string> lines { get; } = new List<string>();
+
+            public bool HasLines => lines.Any();
+
+            public void NewLine()
+            {
+                lines.Add(CurrentLine.ToString());
+                CurrentLine.Clear();
+            }
+
+            public List<string> GetLines()
+            {
+                if (CurrentLine.Length > 0)
+                    NewLine();
+                return lines;
+            }
         }
 
         private enum CommentElement
         {
             Summary,
-            Remarks,
+            Typeparam,
             Param,
-            Returns
+            Returns,
+            Exception,
+            Remarks,
+            Example
         }
     }
 }

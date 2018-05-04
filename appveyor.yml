@@ -21,22 +21,23 @@ branches:
 matrix:
   fast_finish: true
 
-os: Visual Studio 2015
+os: Visual Studio 2017
 
 platform:
   - x86
+  - x64
 
 configuration:
   - Release
 
 environment:
-  VS_VERSION: vs2015
-  BUILD_PLATFORM: 'x32'
+  VS_VERSION: vs2017
+  BUILD_PLATFORM: 'x86'
   DEPS_PATH: '%APPVEYOR_BUILD_FOLDER%\deps'
   LLVM_PATH: '%APPVEYOR_BUILD_FOLDER%\deps\llvm'
   BUILD_PATH: '%APPVEYOR_BUILD_FOLDER%\build\%VS_VERSION%'
   LIB_PATH: '%APPVEYOR_BUILD_FOLDER%\build\%VS_VERSION%\lib\%CONFIGURATION%_%BUILD_PLATFORM%'
-  ARTIFACT_NAME: '%APPVEYOR_PROJECT_NAME%-%VS_VERSION%-%APPVEYOR_REPO_BRANCH%-%APPVEYOR_BUILD_NUMBER%.zip'
+  ARTIFACT_NAME: '%APPVEYOR_PROJECT_NAME%-%APPVEYOR_REPO_TAG_NAME%-%VS_VERSION%-%BUILD_PLATFORM%.zip'
   GITHUB_ACCESS_TOKEN:
     secure: CrxPDgxTKC9ZRvFjttpRPO+e1DT8s0Zkk9HrAmHOIzDkOfFbbu1iTm/yJjZ2eDcd
 
@@ -44,7 +45,7 @@ init:
   - git config --global core.autocrlf true
 
 install:
-  - call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" x86
+  - call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars32.bat"
   - build\premake5.exe --file=build\scripts\LLVM.lua download_llvm
 
 build_script:
@@ -88,3 +89,4 @@ deploy:
   prerelease: true
   on:
     branch: master
+    appveyor_repo_tag: true

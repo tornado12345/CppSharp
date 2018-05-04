@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using CppSharp.AST;
+using CppSharp.Passes;
 
 namespace CppSharp
 {
@@ -77,31 +78,27 @@ namespace CppSharp
 
         public static Enumeration GetEnumWithMatchingItem(this ASTContext context, string pattern)
         {
-            foreach (var module in context.TranslationUnits)
-            {
-                Enumeration @enum = module.FindEnumWithItem(pattern);
-                if (@enum == null) continue;
-                return @enum;
-            }
-
-            return null;
+            return (from unit in context.TranslationUnits
+                    let @enum = unit.FindEnumWithItem(pattern)
+                    where @enum != null
+                    select @enum).FirstOrDefault();
         }
 
-        public static Enumeration.Item GenerateEnumItemFromMacro(this ASTContext context,
+        public static Enumeration.Item GenerateEnumItemFromMacro(this Enumeration @enum,
             MacroDefinition macro)
         {
-            var item = new Enumeration.Item
-            {
-                Name = macro.Name,
-                Expression = macro.Expression,
-                Value = ParseMacroExpression(macro.Expression)
-            };
-
-            return item;
+            return new Enumeration.Item
+                {
+                    Name = macro.Name,
+                    Expression = macro.Expression,
+                    Value = ParseMacroExpression(macro.Expression, @enum),
+                    Namespace = @enum
+                };
         }
 
-        static bool ParseToNumber(string num, out long val)
+        static bool ParseToNumber(string num, Enumeration @enum, out long val)
         {
+            //ExpressionEvaluator does not work with hex
             if (num.StartsWith("0x", StringComparison.CurrentCultureIgnoreCase))
             {
                 num = num.Substring(2);
@@ -110,15 +107,35 @@ namespace CppSharp
                     CultureInfo.CurrentCulture, out val);
             }
 
-            return long.TryParse(num, out val);
+            ExpressionEvaluator evaluator = new ExpressionEvaluator();
+            //Include values of past items
+            evaluator.Variables = new Dictionary<string, object>();
+            foreach (Enumeration.Item item in @enum.Items)
+            {
+                //ExpressionEvaluator is requires lowercase variables
+                evaluator.Variables.Add(item.Name.ToLower(), item.Value);
+            }
+            try
+            {               
+                var ret = evaluator.Evaluate("(long)" + num.ReplaceLineBreaks(" ").Replace('\\',' '));
+                val = (long)ret;
+                return true;
+            }
+            catch (ExpressionEvaluatorSyntaxErrorException)
+            {
+                val = 0;
+                return false;
+            }
         }
 
-        static ulong ParseMacroExpression(string expression)
+        static ulong ParseMacroExpression(string expression, Enumeration @enum)
         {
             // TODO: Handle string expressions
+            if (expression.Length == 3 && expression[0] == '\'' && expression[2] == '\'') // '0' || 'A'
+                return expression[1]; // return the ASCI code of this character
 
             long val;
-            return ParseToNumber(expression, out val) ? (ulong)val : 0;
+            return ParseToNumber(expression, @enum, out val) ? (ulong)val : 0;
         }
 
         public static Enumeration GenerateEnumFromMacros(this ASTContext context, string name,
@@ -143,7 +160,11 @@ namespace CppSharp
                     if (@enum.Items.Exists(it => it.Name == macro.Name))
                         continue;
 
-                    var item = GenerateEnumItemFromMacro(context, macro);
+                    // Set the namespace to the namespace we found the 1st item in
+                    if (@enum.Namespace == null)
+                        @enum.Namespace = unit;
+
+                    var item = @enum.GenerateEnumItemFromMacro(macro);
                     @enum.AddItem(item);
 
                     macro.Enumeration = @enum;
@@ -188,7 +209,7 @@ namespace CppSharp
         public static void IgnoreClassWithName(this ASTContext context, string name)
         {
             foreach (var @class in context.FindClass(name))
-                @class.GenerationKind = GenerationKind.Internal;
+                @class.ExplicitlyIgnore();
         }
 
         public static void SetClassAsOpaque(this ASTContext context, string name)
@@ -351,6 +372,53 @@ namespace CppSharp
             {
                 foreach (var classField in @class.Fields.FindAll(f => f.Name == field))
                     classField.ExplicitlyIgnore();
+            }
+        }
+
+        private static IEnumerable<Class> GetClasses(DeclarationContext decl)
+        {
+            foreach (var @class in decl.Classes)
+            {
+                yield return @class;
+
+                foreach (var class2 in GetClasses(@class))
+                    yield return class2;
+            }
+
+            foreach (var ns in decl.Namespaces)
+            {
+                foreach (var @class in GetClasses(ns))
+                    yield return @class;
+            }
+        }
+
+        public static void IgnoreConversionToProperty(this ASTContext context, string pattern)
+        {
+            foreach (var unit in context.TranslationUnits)
+            {
+                foreach (var @class in GetClasses(unit))
+                {
+                    foreach (var method in @class.Methods)
+                    {
+                        if (Regex.Match(method.QualifiedLogicalOriginalName, pattern).Success)
+                            method.ExcludeFromPasses.Add(typeof(GetterSetterToPropertyPass));
+                    }
+                }
+            }
+        }
+
+        public static void ForceConversionToProperty(this ASTContext context, string pattern)
+        {
+            foreach (var unit in context.TranslationUnits)
+            {
+                foreach (var @class in GetClasses(unit))
+                {
+                    foreach (var method in @class.Methods)
+                    {
+                        if (Regex.Match(method.QualifiedLogicalOriginalName, pattern).Success)
+                            method.ConvertToProperty = true;
+                    }
+                }
             }
         }
 

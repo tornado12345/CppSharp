@@ -4,7 +4,6 @@ using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 using CppSharp.Generators.CSharp;
-using CppSharp.Types;
 
 namespace CppSharp.Generators.CLI
 {
@@ -13,19 +12,18 @@ namespace CppSharp.Generators.CLI
     /// </summary>
     public class CLIHeaders : CLITemplate
     {
-        public override string FileExtension { get { return "h"; } }
-
         public CLIHeaders(BindingContext context, IEnumerable<TranslationUnit> units)
             : base(context, units)
         {
         }
 
+        public override string FileExtension => "h";
+
         public override void Process()
         {
-            PushBlock(BlockKind.Header);
-            PopBlock();
+            GenerateFilePreamble(CommentKind.BCPL);
 
-            PushBlock(CLIBlockKind.Includes);
+            PushBlock(BlockKind.Includes);
             WriteLine("#pragma once");
             NewLine();
 
@@ -33,14 +31,14 @@ namespace CppSharp.Generators.CLI
                 WriteLine("#include \"CppSharp.h\"");
 
             // Generate #include forward references.
-            PushBlock(CLIBlockKind.IncludesForwardReferences);
+            PushBlock(BlockKind.IncludesForwardReferences);
             WriteLine("#include <{0}>", TranslationUnit.IncludePath);
             GenerateIncludeForwardRefs();
             PopBlock(NewLineKind.BeforeNextBlock);
             PopBlock(NewLineKind.Always);
 
             // Generate namespace for forward references.
-            PushBlock(CLIBlockKind.ForwardReferences);
+            PushBlock(BlockKind.ForwardReferences);
             GenerateForwardRefs();
             PopBlock(NewLineKind.BeforeNextBlock);
 
@@ -155,7 +153,7 @@ namespace CppSharp.Generators.CLI
                 if (!@enum.IsGenerated || @enum.IsIncomplete)
                     continue;
 
-                PushBlock(CLIBlockKind.Enum, @enum);
+                PushBlock(BlockKind.Enum, @enum);
                 GenerateEnum(@enum);
                 PopBlock(NewLineKind.BeforeNextBlock);
             }
@@ -172,7 +170,7 @@ namespace CppSharp.Generators.CLI
                 if (@class.IsOpaque)
                     continue;
 
-                PushBlock(CLIBlockKind.Class, @class);
+                PushBlock(BlockKind.Class, @class);
                 GenerateClass(@class);
                 PopBlock(NewLineKind.BeforeNextBlock);
             }
@@ -192,7 +190,7 @@ namespace CppSharp.Generators.CLI
 
             if (generateNamespace)
             {
-                PushBlock(CLIBlockKind.Namespace, @namespace);
+                PushBlock(BlockKind.Namespace, @namespace);
                 WriteLine("namespace {0}", isTopLevel
                                                ? @namespace.TranslationUnit.Module.OutputNamespace
                                                : @namespace.Name);
@@ -221,7 +219,7 @@ namespace CppSharp.Generators.CLI
 
         public void GenerateFunctions(DeclarationContext decl)
         {
-            PushBlock(CLIBlockKind.FunctionsClass);
+            PushBlock(BlockKind.FunctionsClass);
 
             WriteLine("public ref class {0}", TranslationUnit.FileNameWithoutExtension);
             WriteLine("{");
@@ -247,8 +245,18 @@ namespace CppSharp.Generators.CLI
 
             GenerateDeclarationCommon(@class);
 
-            if (GenerateClassProlog(@class))
+            GenerateClassSpecifier(@class);
+
+            if (@class.IsOpaque)
+            {
+                WriteLine(";");
                 return;
+            }
+
+            NewLine();
+            WriteLine("{");
+            WriteLine("public:");
+            NewLine();
 
             // Process the nested types.
             PushIndent();
@@ -274,20 +282,20 @@ namespace CppSharp.Generators.CLI
 
             if (CLIGenerator.ShouldGenerateClassNativeField(@class))
             {
-                PushBlock(CLIBlockKind.AccessSpecifier);
+                PushBlock(BlockKind.AccessSpecifier);
                 WriteLine("protected:");
                 PopBlock(NewLineKind.IfNotEmpty);
 
-                PushBlock(CLIBlockKind.Fields);
+                PushBlock(BlockKind.Fields);
                 WriteLineIndent("bool {0};", Helpers.OwnsNativeInstanceIdentifier);
                 PopBlock();
             }
 
-            PushBlock(CLIBlockKind.AccessSpecifier);
+            PushBlock(BlockKind.AccessSpecifier);
             WriteLine("private:");
             var accBlock = PopBlock(NewLineKind.IfNotEmpty);
 
-            PushBlock(CLIBlockKind.Fields);
+            PushBlock(BlockKind.Fields);
             GenerateClassFields(@class);
             var fieldsBlock = PopBlock();
 
@@ -313,9 +321,6 @@ namespace CppSharp.Generators.CLI
 
         public void GenerateClassGenericMethods(Class @class)
         {
-            var printer = TypePrinter;
-            var oldCtx = printer.TypePrinterContext;
-
             PushIndent();
             foreach (var template in @class.Templates)
             {
@@ -324,21 +329,17 @@ namespace CppSharp.Generators.CLI
                 var functionTemplate = template as FunctionTemplate;
                 if (functionTemplate == null) continue;
 
-                PushBlock(CLIBlockKind.Template);
+                PushBlock(BlockKind.Template);
 
                 var function = functionTemplate.TemplatedFunction;
 
-                var typeCtx = new CLITypePrinterContext()
-                    {
-                        Kind = TypePrinterContextKind.Template,
-                        Declaration = template
-                    };
+                var typePrinter = new CLITypePrinter(Context)
+                {
+                    Declaration = template
+                };
+                typePrinter.PushContext(TypePrinterContextKind.Template);
 
-                printer.TypePrinterContext = typeCtx;
-
-                var typePrinter = new CLITypePrinter(Context, typeCtx);
-                var retType = function.ReturnType.Type.Visit(typePrinter,
-                    function.ReturnType.Qualifiers);
+                var retType = function.ReturnType.Visit(typePrinter);
 
                 var typeNames = "";
                 var paramNames = template.Parameters.Select(param => param.Name).ToList();
@@ -368,8 +369,6 @@ namespace CppSharp.Generators.CLI
                 PopBlock(NewLineKind.BeforeNextBlock);
             }
             PopIndent();
-
-            printer.TypePrinterContext = oldCtx;
         }
 
         public void GenerateClassConstructors(Class @class, string nativeType)
@@ -386,7 +385,7 @@ namespace CppSharp.Generators.CLI
 
             foreach (var ctor in @class.Constructors)
             {
-                if (ASTUtils.CheckIgnoreMethod(ctor, Options))
+                if (ASTUtils.CheckIgnoreMethod(ctor) || FunctionIgnored(ctor))
                     continue;
 
                 // C++/CLI does not allow special member funtions for value types.
@@ -413,14 +412,14 @@ namespace CppSharp.Generators.CLI
 
         private void GenerateClassDestructor(Class @class)
         {
-            PushBlock(CLIBlockKind.Destructor);
+            PushBlock(BlockKind.Destructor);
             WriteLine("~{0}();", @class.Name);
             PopBlock(NewLineKind.BeforeNextBlock);
         }
 
         private void GenerateClassFinalizer(Class @class)
         {
-            PushBlock(CLIBlockKind.Finalizer);
+            PushBlock(BlockKind.Finalizer);
             WriteLine("!{0}();", @class.Name);
             PopBlock(NewLineKind.BeforeNextBlock);
         }
@@ -453,7 +452,7 @@ namespace CppSharp.Generators.CLI
 
         private void GenerateField(Class @class, Field field)
         {
-            PushBlock(CLIBlockKind.Field, field);
+            PushBlock(BlockKind.Field, field);
 
             GenerateDeclarationCommon(field);
             if (@class.IsUnion)
@@ -518,7 +517,7 @@ namespace CppSharp.Generators.CLI
             var staticMethods = new List<Method>();
             foreach (var method in methods)
             {
-                if (ASTUtils.CheckIgnoreMethod(method, Options))
+                if (ASTUtils.CheckIgnoreMethod(method) || FunctionIgnored(method))
                     continue;
 
                 if (method.IsConstructor)
@@ -552,7 +551,7 @@ namespace CppSharp.Generators.CLI
 
                 var type = variable.Type;
 
-                PushBlock(CLIBlockKind.Variable);
+                PushBlock(BlockKind.Variable);
 
                 WriteLine("static property {0} {1}", type, variable.Name);
 
@@ -573,7 +572,7 @@ namespace CppSharp.Generators.CLI
             PopIndent();
         }
 
-        public bool GenerateClassProlog(Class @class)
+        public override void GenerateClassSpecifier(Class @class)
         {
             if (@class.IsUnion)
                 WriteLine("[System::Runtime::InteropServices::StructLayout({0})]",
@@ -592,12 +591,6 @@ namespace CppSharp.Generators.CLI
             if (@class.IsStatic)
                 Write(" abstract sealed");
 
-            if (@class.IsOpaque)
-            {
-                WriteLine(";");
-                return true;
-            }
-
             if (!@class.IsStatic)
             {
                 if (@class.HasRefBase())
@@ -605,13 +598,6 @@ namespace CppSharp.Generators.CLI
                 else if (@class.IsRefType)
                     Write(" : ICppInstance");
             }
-
-            NewLine();
-            WriteLine("{");
-            WriteLine("public:");
-            NewLine();
-
-            return false;
         }
 
         public void GenerateClassProperties(Class @class)
@@ -627,7 +613,8 @@ namespace CppSharp.Generators.CLI
             }
 
             PushIndent();
-            foreach (var prop in @class.Properties.Where(prop => !ASTUtils.CheckIgnoreProperty(prop)))
+            foreach (var prop in @class.Properties.Where(
+                prop => !ASTUtils.CheckIgnoreProperty(prop) && !TypeIgnored(prop.Type)))
             {
                 if (prop.IsInRefTypeAndBackedByValueClassField())
                 {
@@ -662,10 +649,10 @@ namespace CppSharp.Generators.CLI
 
         public void GenerateProperty(Property property)
         {
-            if (!(property.HasGetter || property.HasSetter))
+            if (!(property.HasGetter || property.HasSetter) || TypeIgnored(property.Type))
                 return;
 
-            PushBlock(CLIBlockKind.Property, property);
+            PushBlock(BlockKind.Property, property);
             var type = property.QualifiedType.Visit(TypePrinter);
 
             if (property.IsStatic)
@@ -692,14 +679,8 @@ namespace CppSharp.Generators.CLI
             PopBlock(NewLineKind.BeforeNextBlock);
         }
 
-        public void GenerateMethod(Method method)
+        public override void GenerateMethodSpecifier(Method method, Class @class)
         {
-            if (ASTUtils.CheckIgnoreMethod(method, Options)) return;
-
-            PushBlock(CLIBlockKind.Method, method);
-
-            GenerateDeclarationCommon(method);
-
             if ((method.IsVirtual || method.IsOverride) && !method.IsOperator)
                 Write("virtual ");
 
@@ -724,10 +705,17 @@ namespace CppSharp.Generators.CLI
             Write(")");
 
             if (method.IsOverride)
-            {
                 Write(" override");
-            }
+        }
 
+        public void GenerateMethod(Method method)
+        {
+            if (ASTUtils.CheckIgnoreMethod(method) || FunctionIgnored(method)) return;
+
+            PushBlock(BlockKind.Method, method);
+            GenerateDeclarationCommon(method);
+
+            GenerateMethodSpecifier(method, method.Namespace as Class);
             WriteLine(";");
 
             if (method.OperatorKind == CXXOperatorKind.EqualEqual)
@@ -757,31 +745,27 @@ namespace CppSharp.Generators.CLI
             if (!typedef.IsGenerated)
                 return false;
 
-            FunctionType function;
-            if (typedef.Type.IsPointerTo(out function))
+            var functionType = typedef.Type as FunctionType;
+            if (functionType != null || typedef.Type.IsPointerTo(out functionType))
             {
-                PushBlock(CLIBlockKind.Typedef, typedef);
+                PushBlock(BlockKind.Typedef, typedef);
                 GenerateDeclarationCommon(typedef);
 
                 var insideClass = typedef.Namespace is Class;
 
-                var attributedType = typedef.Type.GetPointee() as AttributedType;
-                if (attributedType != null)
-                {
-                    var equivalentFunctionType = attributedType.Equivalent.Type as FunctionType;
-                    var callingConvention = equivalentFunctionType.CallingConvention.ToInteropCallConv();
-                    if (callingConvention != System.Runtime.InteropServices.CallingConvention.Winapi)
-                    {
-                        WriteLine("[{0}({1}::{2})] ",
-                            "System::Runtime::InteropServices::UnmanagedFunctionPointer",
-                            "System::Runtime::InteropServices::CallingConvention",
-                            callingConvention);
-                    }
-                }
+                var attributedType = typedef.Type.GetPointee().Desugar();
+                var callingConvention = attributedType == null && functionType != null
+                    ? functionType.CallingConvention
+                    : ((FunctionType)attributedType).CallingConvention;
+                var interopCallConv = callingConvention.ToInteropCallConv();
+                if (interopCallConv != System.Runtime.InteropServices.CallingConvention.Winapi)
+                    WriteLine("[System::Runtime::InteropServices::UnmanagedFunctionPointer" + 
+                        "(System::Runtime::InteropServices::CallingConvention::{0})] ",
+                        interopCallConv);
 
                 WriteLine("{0}{1};",
                     !insideClass ? "public " : "",
-                    string.Format(TypePrinter.VisitDelegate(function),
+                    string.Format(TypePrinter.VisitDelegate(functionType).ToString(),
                     typedef.Name));
                 PopBlock(NewLineKind.BeforeNextBlock);
 
@@ -793,10 +777,10 @@ namespace CppSharp.Generators.CLI
 
         public void GenerateFunction(Function function)
         {
-            if (!function.IsGenerated)
+            if (!function.IsGenerated || FunctionIgnored(function))
                 return;
 
-            PushBlock(CLIBlockKind.Function, function);
+            PushBlock(BlockKind.Function, function);
 
             GenerateDeclarationCommon(function);
 
@@ -810,12 +794,26 @@ namespace CppSharp.Generators.CLI
             PopBlock();
         }
 
+        public static bool FunctionIgnored(Function function)
+        {
+            return TypeIgnored(function.ReturnType.Type) ||
+                function.Parameters.Any(param => TypeIgnored(param.Type));
+        }
+
+        public static bool TypeIgnored(CppSharp.AST.Type type)
+        {
+            var desugared = type.Desugar();
+            var finalType = (desugared.GetFinalPointee() ?? desugared).Desugar();
+            Class @class;
+            return finalType.TryGetClass(out @class) && @class.IsIncomplete;
+        }
+
         public void GenerateEnum(Enumeration @enum)
         {
             if (!@enum.IsGenerated || @enum.IsIncomplete)
                 return;
 
-            PushBlock(CLIBlockKind.Enum, @enum);
+            PushBlock(BlockKind.Enum, @enum);
 
             GenerateDeclarationCommon(@enum);
 
@@ -832,28 +830,14 @@ namespace CppSharp.Generators.CLI
             var typeName = TypePrinter.VisitPrimitiveType(@enum.BuiltinType.Type,
                 new TypeQualifiers());
 
-            if (@enum.BuiltinType.Type != PrimitiveType.Int)
+            if (@enum.BuiltinType.Type != PrimitiveType.Int &&
+                @enum.BuiltinType.Type != PrimitiveType.Null)
                 Write(" : {0}", typeName);
 
             NewLine();
             WriteStartBraceIndent();
 
-            foreach (var item in @enum.Items)
-            {
-                PushBlock(CLIBlockKind.EnumItem);
-
-                GenerateInlineSummary(item.Comment);
-
-                Write(item.Name);
-
-                if (item.ExplicitValue)
-                    Write(" = {0}", @enum.GetItemValueAsString(item));
-
-                if (item != @enum.Items.Last())
-                    WriteLine(",");
-
-                PopBlock(NewLineKind.Never);
-            }
+            GenerateEnumItems(@enum);
 
             PopIndent();
             WriteLine("};");

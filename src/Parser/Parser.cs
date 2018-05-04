@@ -18,7 +18,7 @@ namespace CppSharp
         /// <summary>
         /// Fired when source files are parsed.
         /// </summary>
-        public Action<IList<SourceFile>, ParserResult> SourcesParsed = delegate {};
+        public Action<IEnumerable<string>, ParserResult> SourcesParsed = delegate {};
 
         /// <summary>
         /// Fired when library files are parsed.
@@ -36,59 +36,27 @@ namespace CppSharp
         }
 
         /// <summary>
-        /// Get info about that target
+        /// Parses a C++ source file as a translation unit.
         /// </summary>
-        /// <param name="options"></param>
-        /// <returns></returns>
-        public ParserTargetInfo GetTargetInfo(ParserOptions options)
+        public ParserResult ParseSourceFile(string file, ParserOptions options)
         {
-            options.ASTContext = ASTContext;
-
-            return Parser.ClangParser.GetTargetInfo(options);
+            return ParseSourceFiles(new [] { file }, options);
         }
 
         /// <summary>
-        /// Parses a C++ source file to a translation unit.
+        /// Parses a set of C++ source files as a single translation unit.
         /// </summary>
-        private ParserResult ParseSourceFile(SourceFile file)
+        public ParserResult ParseSourceFiles(IEnumerable<string> files, ParserOptions options)
         {
-            var options = file.Options;
-            options.ASTContext = ASTContext;
-            options.AddSourceFiles(file.Path);
-
-            var result = Parser.ClangParser.ParseHeader(options);
-            SourcesParsed(new[] { file }, result);
-
-            return result;
-        }
-
-        /// <summary>
-        /// Parses C++ source files to a translation unit.
-        /// </summary>
-        private void ParseSourceFiles(IList<SourceFile> files)
-        {
-            var options = files[0].Options;
             options.ASTContext = ASTContext;
 
             foreach (var file in files)
-                options.AddSourceFiles(file.Path);
-            using (var result = Parser.ClangParser.ParseHeader(options))
-                SourcesParsed(files, result);
-        }
+                options.AddSourceFiles(file);
 
-        /// <summary>
-        /// Parses the project source files.
-        /// </summary>
-        public void ParseProject(Project project, bool unityBuild)
-        {
-            // TODO: Search for cached AST trees on disk
-            // TODO: Do multi-threaded parsing of source files
+            var result = Parser.ClangParser.ParseHeader(options);
+            SourcesParsed(files, result);
 
-            if (unityBuild)
-                ParseSourceFiles(project.Sources);
-            else
-                foreach (var parserResult in project.Sources.Select(s => ParseSourceFile(s)).ToList())
-                    parserResult.Dispose();
+            return result;
         }
 
         /// <summary>

@@ -7,6 +7,47 @@
 #include <string>
 #include <vector>
 
+class DLL_API TestPacking
+{
+public:
+    int i1;
+    int i2;
+    bool b;
+    TestPacking();
+};
+
+#pragma pack(1)
+class DLL_API TestPacking1: public TestPacking
+{
+public:
+    TestPacking1();
+    ~TestPacking1();
+};
+
+#pragma pack(2)
+class DLL_API TestPacking2: public TestPacking
+{
+public:
+    TestPacking2();
+    ~TestPacking2();
+};
+
+#pragma pack(4)
+class DLL_API TestPacking4: public TestPacking
+{
+public:
+    TestPacking4();
+    ~TestPacking4();
+};
+
+#pragma pack(8)
+class DLL_API TestPacking8: public TestPacking
+{
+public:
+    TestPacking8();
+    ~TestPacking8();
+};
+
 class DLL_API IgnoredType
 {
     class IgnoredNested
@@ -49,6 +90,7 @@ public:
     void* ptr;
     static const int unsafe;
     static const char charArray[];
+    static int readWrite;
 
     const char* GetANSI();
 
@@ -64,10 +106,14 @@ public:
     int TakesRef(const Foo& other);
 
     bool operator ==(const Foo& other) const;
+
+    int fooPtr();
+    char16_t returnChar16();
 };
 
 // HACK: do not move these to the cpp - C++/CLI is buggy and cannot link static fields initialised in the cpp
 const int Foo::unsafe = 10;
+int Foo::readWrite = 15;
 const char Foo::charArray[] = "abc";
 
 struct DLL_API Bar
@@ -216,6 +262,7 @@ public:
     typedef int typedefInOverride;
     virtual int pureFunction(typedefInOverride i = 0);
     virtual int pureFunction1();
+private:
     virtual int pureFunction2(bool* ok = 0);
 };
 
@@ -315,13 +362,14 @@ DLL_API TestMoveOperatorToClass operator+(const TestMoveOperatorToClass& b1,
 // Not a valid operator overload for Foo2 in managed code - comparison operators need to return bool.
 DLL_API int operator==(const Foo2& a, const Foo2& b)
 {
-	return 0;
+        return 0;
 }
 
 // Tests delegates
 typedef int (*DelegateInGlobalNamespace)(int);
 typedef int (STDCALL *DelegateStdCall)(int);
 typedef int (CDECL *DelegateCDecl)(int n);
+typedef void(*DelegateNullCheck)(void);
 
 struct DLL_API TestDelegates
 {
@@ -340,8 +388,12 @@ struct DLL_API TestDelegates
     void MarshalAnonymousDelegate2(int (*del)(int n));
     void MarshalAnonymousDelegate3(float (*del)(float n));
     int (*MarshalAnonymousDelegate4())(int n);
+    int MarshalAnonymousDelegate5(int (STDCALL *del)(int n));
+    int MarshalAnonymousDelegate6(int (STDCALL *del)(int n));
 
     void MarshalDelegateInAnotherUnit(DelegateInAnotherUnit del);
+
+    DelegateNullCheck MarshalNullDelegate();
 
     DelegateInClass A;
     DelegateInGlobalNamespace B;
@@ -381,15 +433,16 @@ struct DLL_API TestStaticClass
 {
     static int Add(int a, int b);
 
-	static int GetOneTwoThree();
+    static int GetOneTwoThree();
 
-protected:
-
-	static int _Mult(int a, int b);
-
-	static int GetFourFiveSix();
+    TestStaticClass& operator=(const TestStaticClass& oth);
 
 private:
+
+    static int _Mult(int a, int b);
+
+    static int GetFourFiveSix();
+
     TestStaticClass();
 };
 
@@ -414,9 +467,9 @@ int TestStaticClassDerived::Foo() { return 0; }
 class DLL_API TestNotStaticClass
 {
 public:
-	static TestNotStaticClass StaticFunction();
+    static TestNotStaticClass StaticFunction();
 private:
-	TestNotStaticClass();
+    TestNotStaticClass();
 };
 
 TestNotStaticClass::TestNotStaticClass()
@@ -425,7 +478,7 @@ TestNotStaticClass::TestNotStaticClass()
 
 TestNotStaticClass TestNotStaticClass::StaticFunction()
 {
-	return TestNotStaticClass();
+    return TestNotStaticClass();
 }
 
 class HasIgnoredField
@@ -473,8 +526,8 @@ struct EmptyNamedNestedEnum
 typedef unsigned long foo_t;
 typedef struct DLL_API SomeStruct
 {
-	SomeStruct();
-	foo_t p;
+        SomeStruct();
+        foo_t p;
 } SomeStruct;
 
 SomeStruct::SomeStruct() : p(1) {}
@@ -485,11 +538,11 @@ class DLL_API SomeClassExtendingTheStruct : public SomeStruct
 
 namespace SomeNamespace
 {
-	class DLL_API AbstractClass
-	{
-	public:
-		virtual void AbstractMethod() = 0;
-	};
+        class DLL_API AbstractClass
+        {
+        public:
+                virtual void AbstractMethod() = 0;
+        };
 }
 
 // Test operator overloads
@@ -498,11 +551,11 @@ class DLL_API ClassWithOverloadedOperators
 public:
     ClassWithOverloadedOperators();
 
-	operator char();
-	operator int();
-	operator short();
+        operator char();
+        operator int();
+        operator short();
 
-	virtual bool operator<(const ClassWithOverloadedOperators &other) const;
+        virtual bool operator<(const ClassWithOverloadedOperators &other) const;
 };
 
 ClassWithOverloadedOperators::ClassWithOverloadedOperators() {}
@@ -523,16 +576,46 @@ DLL_API int Function()
 // Tests properties
 struct DLL_API TestProperties
 {
+public:
     TestProperties();
     int Field;
 
     int getFieldValue();
     void setFieldValue(int Value);
+
+    bool isVirtual();
+    virtual void setVirtual(bool value);
+
+    double refToPrimitiveInSetter() const;
+    void setRefToPrimitiveInSetter(const double& value);
+
+    int getterAndSetterWithTheSameName();
+    void getterAndSetterWithTheSameName(int value);
+
+    void set(int value);
+
+    int setterReturnsBoolean();
+    bool setterReturnsBoolean(int value);
+
+    virtual int virtualSetterReturnsBoolean();
+    virtual bool setVirtualSetterReturnsBoolean(int value);
+private:
+    int FieldValue;
+    double _refToPrimitiveInSetter;
+    int _getterAndSetterWithTheSameName;
+    int _setterReturnsBoolean;
+    int _virtualSetterReturnsBoolean;
 };
 
-TestProperties::TestProperties() : Field(0) {}
-int TestProperties::getFieldValue() { return Field; }
-void TestProperties::setFieldValue(int Value) { Field = Value; }
+class DLL_API HasOverridenSetter : public TestProperties
+{
+public:
+    HasOverridenSetter();
+    void setVirtual(bool value);
+
+    int virtualSetterReturnsBoolean() override;
+    bool setVirtualSetterReturnsBoolean(int value) override;
+};
 
 class DLL_API TypeMappedIndex
 {
@@ -560,6 +643,7 @@ public:
     foo_t operator[](TestProperties b);
     Bar& operator[](unsigned long i);
     Bar& operator[](const TypeMappedIndex& key);
+    Bar& operator[](const Foo& key);
     // Test that we do not generate 'ref int' parameters as C# does not allow it
     int operator[](CS_OUT char key);
 
@@ -627,7 +711,12 @@ class DLL_API TestFixedArrays
 {
 public:
     TestFixedArrays();
-    VoidPtrRetFunctionTypedef Array[10];    
+    VoidPtrRetFunctionTypedef Array[10];
+#ifndef _MSC_VER
+    TestWideStrings ZeroSizedClassArray[0];
+    MyEnum ZeroSizedEnumArray[0];
+#endif
+    int ZeroSizedArray[0];
 };
 
 TestFixedArrays::TestFixedArrays() {}
@@ -655,7 +744,7 @@ int TestGetterSetterToProperties::getWidth() { return 640; }
 int TestGetterSetterToProperties::getHeight() { return 480; }
 
 // Tests conversion operators of classes
-class DLL_API ClassA 
+class DLL_API ClassA
 {
 public:
     ClassA(int value);
@@ -680,6 +769,14 @@ public:
     // This should lead to an explicit conversion
     explicit ClassC(const ClassB& x);
     int Value;
+};
+
+class DLL_API ClassD
+{
+public:
+    ClassD(int value);
+    // Accessing this field should return reference, not a copy.
+    ClassA Field;
 };
 
 // Test decltype
@@ -755,10 +852,12 @@ public:
 
 class DLL_API HasStdString
 {
-    // test if these are ignored with the C# back-end
 public:
-    std::string testStdString(std::string s);
+    HasStdString();
+    ~HasStdString();
+    std::string testStdString(const std::string& s);
     std::string s;
+    std::string& getStdString();
 };
 
 class DLL_API InternalCtorAmbiguity
@@ -791,9 +890,6 @@ template<typename T> class FriendTemplate
 {
     template<typename TT>
     friend FriendTemplate<TT> func(const FriendTemplate<TT>&);
-
-    friend FriendTemplate;
-    friend class FriendTemplate;
 
     template<typename TT>
     friend class FriendTemplate;
@@ -832,10 +928,10 @@ void DLL_API funcTryRefTypeOut(CS_OUT RefTypeClassPassTry classTry);
 #define CS_VALUE_TYPE
 struct CS_VALUE_TYPE ValueTypeArrays
 {
-	float firstValueTypeArrray[ARRAY_LENGTH];
-	int secondValueTypeArray[ARRAY_LENGTH];
-	char thirdValueTypeArray[ARRAY_LENGTH];
-	size_t size;
+        float firstValueTypeArrray[ARRAY_LENGTH];
+        int secondValueTypeArray[ARRAY_LENGTH];
+        char thirdValueTypeArray[ARRAY_LENGTH];
+        size_t size;
 };
 
 class DLL_API HasVirtualProperty
@@ -843,12 +939,17 @@ class DLL_API HasVirtualProperty
 public:
     virtual int getProperty();
     virtual void setProperty(int target);
+protected:
+    virtual int getProtectedProperty();
+    virtual void setProtectedProperty(int value);
 };
 
 class DLL_API ChangedAccessOfInheritedProperty : public HasVirtualProperty
 {
 public:
     ChangedAccessOfInheritedProperty();
+    int getProtectedProperty();
+    void setProtectedProperty(int value);
 protected:
     int getProperty();
     void setProperty(int value);
@@ -1070,7 +1171,7 @@ void TemplateWithVirtual<T>::v()
 
 template <typename T>
 int FunctionTemplateWithDependentTypeDefaultExpr(size_t size = sizeof(T)) {
-	return size;
+        return size;
 }
 
 class DLL_API DerivedFromTemplateInstantiationWithVirtual : public TemplateWithVirtual<int>
@@ -1174,12 +1275,6 @@ class HasSystemBase : public std::string
 
 typedef SpecialisesVoid<std::vector<std::string>> SpecialisesWithNestedSystemTypes;
 
-struct HasLongDoubles
-{
-    long double simple;
-    long double array[4];
-};
-
 enum
 {
     EmptyEnumsWithSameMemberPrefix1,
@@ -1212,7 +1307,123 @@ public:
     void overload(int& i);
     void overload(int&& i);
     void overload(const int& i);
+    void dispose();
 };
 
 DLL_API void hasPointerParam(Foo* foo, int i);
 DLL_API void hasPointerParam(const Foo& foo);
+
+enum EmptyEnum { };
+
+enum __enum_with_underscores { lOWER_BEFORE_CAPITAL, CAPITALS_More, underscore_at_end_, usesDigits1_0 };
+
+void DLL_API sMallFollowedByCapital();
+
+class DLL_API HasCopyAndMoveConstructor
+{
+public:
+    HasCopyAndMoveConstructor(int value);
+    HasCopyAndMoveConstructor(const HasCopyAndMoveConstructor& other);
+    HasCopyAndMoveConstructor(HasCopyAndMoveConstructor&& other);
+    ~HasCopyAndMoveConstructor();
+    int getField();
+private:
+    int field;
+};
+
+class DLL_API HasVirtualFunctionsWithStringParams
+{
+public:
+    HasVirtualFunctionsWithStringParams();
+    ~HasVirtualFunctionsWithStringParams();
+    virtual void PureVirtualFunctionWithStringParams(std::string testString) = 0;
+    virtual int VirtualFunctionWithStringParam(std::string testString);
+};
+
+class DLL_API ImplementsVirtualFunctionsWithStringParams : public HasVirtualFunctionsWithStringParams
+{
+public:
+    ImplementsVirtualFunctionsWithStringParams();
+    ~ImplementsVirtualFunctionsWithStringParams();
+    virtual void PureVirtualFunctionWithStringParams(std::string testString);
+};
+
+class DLL_API HasVirtualFunctionWithBoolParams
+{
+public:
+    HasVirtualFunctionWithBoolParams();
+    ~HasVirtualFunctionWithBoolParams();
+    virtual bool virtualFunctionWithBoolParamAndReturnsBool(bool testBool);
+};
+
+class HasProtectedCtorWithProtectedParam
+{
+protected:
+    enum ProtectedEnum
+    {
+        Member
+    };
+    HasProtectedCtorWithProtectedParam(ProtectedEnum protectedParam);
+};
+
+class DLL_API SecondaryBaseWithIgnoredVirtualMethod
+{
+public:
+    SecondaryBaseWithIgnoredVirtualMethod();
+    ~SecondaryBaseWithIgnoredVirtualMethod();
+    virtual void generated();
+    virtual void ignored(const IgnoredType& ignoredParam);
+};
+
+class DLL_API DerivedFromSecondaryBaseWithIgnoredVirtualMethod : public Foo, public SecondaryBaseWithIgnoredVirtualMethod
+{
+public:
+    DerivedFromSecondaryBaseWithIgnoredVirtualMethod();
+    ~DerivedFromSecondaryBaseWithIgnoredVirtualMethod();
+    void generated();
+    void ignored(const IgnoredType& ignoredParam);
+};
+
+template<typename T> void TemplatedFunction(T type)
+{
+
+}
+
+inline namespace InlineNamespace
+{
+    void FunctionInsideInlineNamespace()
+    {
+        
+    }
+}
+
+union
+{
+    struct
+    {
+        struct
+        {
+            long Capabilities;
+        } Server;
+        struct
+        {
+            long Capabilities;
+        } Share;
+    } Smb2;
+} ProtocolSpecific;
+
+
+template<class _Other>
+using UsingTemplatePtr = _Other *;
+
+struct TemplateWithUsingTemplateMember
+{
+    UsingTemplatePtr<TemplateWithUsingTemplateMember> _Ref;
+};
+
+namespace hasUnnamedDecl
+{
+    extern "C"
+    {
+    }
+}

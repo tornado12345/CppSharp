@@ -4,13 +4,19 @@ project "CppSharp.Generator.Tests"
   SetupManagedProject()
 
   files { "**.cs" }
-  
-  libdirs 
+  vpaths { ["*"] = "*" }
+
+  libdirs
   {
     depsdir .. "/NUnit",
     depsdir .. "/NSubstitute"
   }
-  
+
+  files { testsdir .. "/Native/AST.h", testsdir .. "/Native/ASTExtensions.h", testsdir .. "/Native/Passes.h" }
+  filter "files:**.h"
+     buildaction "None"
+  filter {}
+
   SetupParser()
 
   links

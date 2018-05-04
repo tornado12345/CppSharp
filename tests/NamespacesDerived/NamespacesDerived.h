@@ -71,6 +71,23 @@ public:
     int callManagedOverride();
 };
 
+class DLL_API DerivedFromExternalSpecialization : public TemplateWithIndependentFields<Derived>
+{
+public:
+    DerivedFromExternalSpecialization(int i,
+                                      TemplateWithIndependentFields<HasVirtualInDependency> defaultExternalSpecialization =
+                                          TemplateWithIndependentFields<HasVirtualInDependency>());
+    ~DerivedFromExternalSpecialization();
+    TemplateWithIndependentFields<Base3> returnExternalSpecialization();
+};
+
+class DLL_API DerivedFromSecondaryBaseInDependency : public Derived, public SecondaryBase
+{
+public:
+    DerivedFromSecondaryBaseInDependency();
+    ~DerivedFromSecondaryBaseInDependency();
+};
+
 namespace NamespacesBase
 {
     class DLL_API ClassInNamespaceNamedAfterDependency

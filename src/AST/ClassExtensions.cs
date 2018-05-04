@@ -7,24 +7,6 @@ namespace CppSharp.AST
 {
     public static class ClassExtensions 
     {
-        public static IEnumerable<Method> FindOperator(this Class @class,
-            CXXOperatorKind kind)
-        {
-            return @class.Operators.Where(method => method.OperatorKind == kind);
-        }
-
-        public static IEnumerable<Method> FindMethodByOriginalName(this Class @class,
-            string name)
-        {
-            return @class.Methods.Where(method => method.OriginalName == name);
-        }
-
-        public static IEnumerable<Variable> FindVariableByOriginalName(this Class @class,
-            string originalName)
-        {
-            return @class.Variables.Where(v => v.OriginalName == originalName);
-        }
-
         public static IEnumerable<Function> GetFunctionOverloads(this Class @class,
             Function function)
         {
@@ -59,41 +41,18 @@ namespace CppSharp.AST
             }
         }
 
-        public static Method GetBaseMethod(this Class @class, Method @override,
-            bool onlyPrimaryBase = false, bool getTopmost = false)
+        public static Method GetBaseMethod(this Class @class, Method @override)
         {
-            foreach (var @base in @class.Bases.Where(
-                b => b.IsClass && b.Class.OriginalClass != @class && (!onlyPrimaryBase || !b.Class.IsInterface)))
-            {
-                Method baseMethod;
-                if (!getTopmost)
-                {
-                    baseMethod = @base.Class.GetBaseMethod(@override, onlyPrimaryBase);
-                    if (baseMethod != null)
-                        return baseMethod;
-                }
+            if (@class.BaseClass == null || @class.BaseClass.IsInterface)
+                return null;
 
-                baseMethod = (from method in @base.Class.Methods
-                    where @override.CanOverride(method)
-                    select method).FirstOrDefault();
-                if (baseMethod != null)
-                    return baseMethod;
+            var baseClass = @class.BaseClass.OriginalClass ?? @class.BaseClass;
+            Method baseMethod = baseClass.GetBaseMethod(@override);
+            if (baseMethod != null)
+                return baseMethod;
 
-                if (getTopmost)
-                {
-                    baseMethod = (@base.Class.GetBaseMethod(@override, onlyPrimaryBase, true));
-                    if (baseMethod != null)
-                        return baseMethod;
-                }
-            }
-            return null;
-        }
-
-        public static bool HasCallableBaseMethodInPrimaryBase(this Class @class, Method method)
-        {
-            var baseMethod = @class.GetBaseMethod(method, true, true);
-            return baseMethod != null && !baseMethod.IsPure && baseMethod.IsGenerated &&
-                !((Class) baseMethod.OriginalNamespace).IsInterface;
+            var methods = baseClass.Methods.Concat(baseClass.Declarations.OfType<Method>());
+            return methods.FirstOrDefault(@override.CanOverride);
         }
 
         public static Property GetBaseProperty(this Class @class, Property @override,
@@ -113,11 +72,13 @@ namespace CppSharp.AST
                         return baseProperty;
                 }
 
-                baseProperty = (from property in @base.Class.Properties
+                var properties = @base.Class.Properties.Concat(@base.Class.Declarations.OfType<Property>());
+                baseProperty = (from property in properties
                     where property.OriginalName == @override.OriginalName &&
                         property.Parameters.SequenceEqual(@override.Parameters,
                             ParameterTypeComparer.Instance)
                     select property).FirstOrDefault();
+
                 if (baseProperty != null)
                     return baseProperty;
 
@@ -172,21 +133,6 @@ namespace CppSharp.AST
             return null;
         }
 
-        public static Method GetMethodByName(this Class @class, string methodName)
-        {
-            var method = @class.Methods.FirstOrDefault(m => m.Name == methodName);
-            if (method != null)
-                return method;
-
-            foreach (var @base in @class.Bases.Where(b => b.Type.IsClass()))
-            {
-                method = @base.Class.GetMethodByName(methodName);
-                if (method != null)
-                    return method;
-            }
-            return null;
-        }
-
         public static bool HasRefBase(this Class @class)
         {
             Class @base = null;
@@ -194,14 +140,89 @@ namespace CppSharp.AST
             if (@class.HasBaseClass)
                 @base = @class.Bases[0].Class;
 
-            var hasRefBase = @base != null && @base.IsRefType && @base.IsDeclared;
-
-            return hasRefBase;
+            return @base?.IsRefType == true && @base.IsGenerated;
         }
 
         public static IEnumerable<TranslationUnit> GetGenerated(this IEnumerable<TranslationUnit> units)
         {
             return units.Where(u => u.IsGenerated && (u.HasDeclarations || u.IsSystemHeader) && u.IsValid);
+        }
+
+        public static IEnumerable<Class> GetSpecializedClassesToGenerate(
+            this Class dependentClass)
+        {
+            IEnumerable<Class> specializedClasses = GetSpecializedClassesOf(dependentClass);
+            if (!specializedClasses.Any() || dependentClass.HasDependentValueFieldInLayout())
+                return specializedClasses;
+
+            var specializations = new List<Class>();
+            var specialization = specializedClasses.FirstOrDefault(s => s.IsGenerated);
+            if (specialization == null)
+                specializations.Add(specializedClasses.First());
+            else
+                specializations.Add(specialization);
+            return specializations;
+        }
+
+        private static IEnumerable<Class> GetSpecializedClassesOf(this Class dependentClass)
+        {
+            if (dependentClass.IsTemplate)
+                return dependentClass.Specializations;
+
+            Class template = dependentClass.Namespace as Class;
+            if (template == null || !template.IsTemplate)
+                // just one level of nesting supported for the time being
+                return Enumerable.Empty<Class>();
+
+            return template.Specializations.SelectMany(s => s.Classes.Where(
+                c => c.Name == dependentClass.Name)).ToList();
+        }
+
+        public static Class GetInterface(this Class @class)
+        {
+            var specialization = @class as ClassTemplateSpecialization;
+            Class @interface = null;
+            if (specialization == null)
+            {
+                @interface = @class.Namespace.Classes.Find(
+                    c => c.OriginalClass == @class && c.IsInterface);
+            }
+            else
+            {
+                Class template = specialization.TemplatedDecl.TemplatedClass;
+                Class templatedInterface = @class.Namespace.Classes.Find(
+                   c => c.OriginalClass == template && c.IsInterface);
+                if (templatedInterface != null)
+                    @interface = templatedInterface.Specializations.FirstOrDefault(
+                        s => s.OriginalClass == specialization && s.IsInterface);
+            }
+
+            return @interface;
+        }
+
+        public static bool HasDependentValueFieldInLayout(this Class @class)
+        {
+            if (@class.Fields.Any(f => IsValueDependent(f.Type)))
+                return true;
+
+            return @class.Bases.Where(b => b.IsClass).Select(
+                b => b.Class).Any(HasDependentValueFieldInLayout);
+        }
+
+        private static bool IsValueDependent(Type type)
+        {
+            var desugared = type.Desugar();
+            if (desugared is TemplateParameterType)
+                return true;
+            var tagType = desugared as TagType;
+            if (tagType?.IsDependent == true)
+                return true;
+            var templateType = desugared as TemplateSpecializationType;
+            if (templateType?.Arguments.Any(
+                a => a.Type.Type?.Desugar().IsDependent == true) == true)
+                return true;
+            var arrayType = desugared as ArrayType;
+            return arrayType != null && IsValueDependent(arrayType.Type);
         }
     }
 }

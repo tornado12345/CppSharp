@@ -1,4 +1,5 @@
-﻿using CppSharp.AST;
+﻿using System.Linq;
+using CppSharp.AST;
 
 namespace CppSharp.Passes
 {
@@ -46,13 +47,15 @@ namespace CppSharp.Passes
                 Access = AccessSpecifier.Public,
                 Kind = CXXMethodKind.Normal,
                 ReturnType = function.ReturnType,
-                Parameters = function.Parameters,
                 CallingConvention = function.CallingConvention,
                 IsVariadic = function.IsVariadic,
                 IsInline = function.IsInline,
                 IsStatic = true,
                 Conversion = MethodConversionKind.FunctionToStaticMethod
             };
+
+            method.Parameters.AddRange(function.Parameters.Select(
+                p => new Parameter(p) { Namespace = method }));
 
             @class.Methods.Add(method);
 

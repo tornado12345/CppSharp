@@ -7,11 +7,15 @@ project "CppSharp.Generator"
 
   files   { "**.cs", "**verbs.txt" }
   excludes { "Filter.cs" }
+  vpaths { ["*"] = "*" }
+
+  dependson { "Std-symbols" }
 
   links
   {
   	"System",
   	"System.Core",
+  	"Microsoft.CSharp",
   	"CppSharp",
   	"CppSharp.AST",
   	"CppSharp.Parser"
@@ -19,5 +23,7 @@ project "CppSharp.Generator"
 
   SetupParser()
 
-  configuration '**verbs.txt'
+  filter { 'files:**verbs.txt' }
     buildaction "Embed"
+
+  filter {}

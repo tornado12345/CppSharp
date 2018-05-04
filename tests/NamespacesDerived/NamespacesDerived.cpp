@@ -62,6 +62,20 @@ Abstract* Derived2::getAbstract()
     return 0;
 }
 
+DerivedFromExternalSpecialization::DerivedFromExternalSpecialization(int i,
+                                                                     TemplateWithIndependentFields<HasVirtualInDependency> defaultExternalSpecialization)
+{
+}
+
+DerivedFromExternalSpecialization::~DerivedFromExternalSpecialization()
+{
+}
+
+TemplateWithIndependentFields<Base3> DerivedFromExternalSpecialization::returnExternalSpecialization()
+{
+    return TemplateWithIndependentFields<Base3>();
+}
+
 HasVirtualInDependency::HasVirtualInDependency()
 {
 }
@@ -69,4 +83,12 @@ HasVirtualInDependency::HasVirtualInDependency()
 int HasVirtualInDependency::callManagedOverride()
 {
     return managedObject->virtualInCore(0);
+}
+
+DerivedFromSecondaryBaseInDependency::DerivedFromSecondaryBaseInDependency()
+{
+}
+
+DerivedFromSecondaryBaseInDependency::~DerivedFromSecondaryBaseInDependency()
+{
 }

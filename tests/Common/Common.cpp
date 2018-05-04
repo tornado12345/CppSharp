@@ -1,6 +1,42 @@
 #include "Common.h"
 #include <string.h>
 
+TestPacking::TestPacking()
+{
+}
+
+TestPacking1::TestPacking1()
+{
+}
+
+TestPacking1::~TestPacking1()
+{
+}
+
+TestPacking2::TestPacking2()
+{
+}
+
+TestPacking2::~TestPacking2()
+{
+}
+
+TestPacking4::TestPacking4()
+{
+}
+
+TestPacking4::~TestPacking4()
+{
+}
+
+TestPacking8::TestPacking8()
+{
+}
+
+TestPacking8::~TestPacking8()
+{
+}
+
 Foo::Foo()
 {
     auto p = new int[4];
@@ -31,6 +67,16 @@ int Foo::TakesRef(const Foo &other)
 bool Foo::operator ==(const Foo& other) const
 {
     return A == other.A && B == other.B;
+}
+
+int Foo::fooPtr()
+{
+    return 1;
+}
+
+char16_t Foo::returnChar16()
+{
+    return 'a';
 }
 
 Foo2::Foo2() {}
@@ -234,40 +280,40 @@ void Hello::EnumOutRef(int value, CS_OUT Enum& e)
 
 void Hello::EnumInOut(CS_IN_OUT Enum* e)
 {
-	if (*e == Enum::E)
-		*e = Enum::F;
+        if (*e == Enum::E)
+                *e = Enum::F;
 }
 
 void Hello::EnumInOutRef(CS_IN_OUT Enum& e)
 {
-	if (e == Enum::E)
-		e = Enum::F;
+        if (e == Enum::E)
+                e = Enum::F;
 }
 
 void Hello::StringOut(CS_OUT const char** str)
 {
-	*str = "HelloStringOut";
+        *str = "HelloStringOut";
 }
 
 void Hello::StringOutRef(CS_OUT const char*& str)
 {
-	str = "HelloStringOutRef";
+        str = "HelloStringOutRef";
 }
 
 void Hello::StringInOut(CS_IN_OUT const char** str)
 {
-	if (strcmp(*str, "Hello") == 0)
-		*str = "StringInOut";
-	else
-		*str = "Failed";
+        if (strcmp(*str, "Hello") == 0)
+                *str = "StringInOut";
+        else
+                *str = "Failed";
 }
 
 void Hello::StringInOutRef(CS_IN_OUT const char*& str)
 {
-	if (strcmp(str, "Hello") == 0)
-		str = "StringInOutRef";
-	else
-		str = "Failed";
+        if (strcmp(str, "Hello") == 0)
+                str = "StringInOutRef";
+        else
+                str = "Failed";
 }
 
 void Hello::StringTypedef(const TypedefChar* str)
@@ -393,6 +439,16 @@ int (*TestDelegates::MarshalAnonymousDelegate4())(int n)
     return f;
 }
 
+int TestDelegates::MarshalAnonymousDelegate5(int (STDCALL *del)(int))
+{
+    return del(2);
+}
+
+int TestDelegates::MarshalAnonymousDelegate6(int (STDCALL *del)(int))
+{
+    return del(3);
+}
+
 ClassA::ClassA(int value)
 {
     Value = value;
@@ -413,6 +469,11 @@ ClassC::ClassC(const ClassB &x)
     Value = x.Value;
 }
 
+ClassD::ClassD(int value)
+    : Field(value)
+{
+}
+
 void DelegateNamespace::Nested::f1(void (*)())
 {
 }
@@ -421,17 +482,130 @@ void TestDelegates::MarshalDelegateInAnotherUnit(DelegateInAnotherUnit del)
 {
 }
 
+DelegateNullCheck TestDelegates::MarshalNullDelegate()
+{
+    return nullptr;
+}
+
 void DelegateNamespace::f2(void (*)())
 {
 }
 
-std::string HasStdString::testStdString(std::string s)
+HasStdString::HasStdString()
+{
+}
+
+HasStdString::~HasStdString()
+{
+}
+
+std::string HasStdString::testStdString(const std::string& s)
 {
     return s + "_test";
 }
 
+std::string& HasStdString::getStdString()
+{
+    return s;
+}
+
+TestProperties::TestProperties() : Field(0), _refToPrimitiveInSetter(0),
+    _getterAndSetterWithTheSameName(0), _setterReturnsBoolean(0), _virtualSetterReturnsBoolean(0)
+{
+}
+
+int TestProperties::getFieldValue()
+{
+    return Field;
+}
+
+void TestProperties::setFieldValue(int Value)
+{
+    Field = Value;
+}
+
+bool TestProperties::isVirtual()
+{
+    return false;
+}
+
+void TestProperties::setVirtual(bool value)
+{
+}
+
+double TestProperties::refToPrimitiveInSetter() const
+{
+    return _refToPrimitiveInSetter;
+}
+
+void TestProperties::setRefToPrimitiveInSetter(const double& value)
+{
+    _refToPrimitiveInSetter = value;
+}
+
+int TestProperties::getterAndSetterWithTheSameName()
+{
+    return _getterAndSetterWithTheSameName;
+}
+
+void TestProperties::getterAndSetterWithTheSameName(int value)
+{
+    _getterAndSetterWithTheSameName = value;
+}
+
+void TestProperties::set(int value)
+{
+}
+
+int TestProperties::setterReturnsBoolean()
+{
+    return _setterReturnsBoolean;
+}
+
+bool TestProperties::setterReturnsBoolean(int value)
+{
+    bool changed = _setterReturnsBoolean != value;
+    _setterReturnsBoolean = value;
+    return changed;
+}
+
+int TestProperties::virtualSetterReturnsBoolean()
+{
+    return _virtualSetterReturnsBoolean;
+}
+
+bool TestProperties::setVirtualSetterReturnsBoolean(int value)
+{
+    bool changed = _virtualSetterReturnsBoolean != value;
+    _virtualSetterReturnsBoolean = value;
+    return changed;
+}
+
+HasOverridenSetter::HasOverridenSetter()
+{
+}
+
+void HasOverridenSetter::setVirtual(bool value)
+{
+}
+
+int HasOverridenSetter::virtualSetterReturnsBoolean()
+{
+    return TestProperties::virtualSetterReturnsBoolean();
+}
+
+bool HasOverridenSetter::setVirtualSetterReturnsBoolean(int value)
+{
+    return TestProperties::setVirtualSetterReturnsBoolean(value);
+}
+
 TypeMappedIndex::TypeMappedIndex()
 {
+}
+
+Bar& TestIndexedProperties::operator[](const Foo& key)
+{
+    return bar;
 }
 
 InternalCtorAmbiguity::InternalCtorAmbiguity(void* param)
@@ -497,6 +671,15 @@ void HasVirtualProperty::setProperty(int target)
 {
 }
 
+int HasVirtualProperty::getProtectedProperty()
+{
+    return 2;
+}
+
+void HasVirtualProperty::setProtectedProperty(int value)
+{
+}
+
 ChangedAccessOfInheritedProperty::ChangedAccessOfInheritedProperty()
 {
 }
@@ -507,6 +690,15 @@ int ChangedAccessOfInheritedProperty::getProperty()
 }
 
 void ChangedAccessOfInheritedProperty::setProperty(int value)
+{
+}
+
+int ChangedAccessOfInheritedProperty::getProtectedProperty()
+{
+    return 3;
+}
+
+void ChangedAccessOfInheritedProperty::setProtectedProperty(int value)
 {
 }
 
@@ -648,10 +840,117 @@ void HasOverloadsWithDifferentPointerKindsToSameType::overload(const int& i)
 {
 }
 
+void HasOverloadsWithDifferentPointerKindsToSameType::dispose()
+{
+}
+
 void hasPointerParam(Foo* foo, int i)
 {
 }
 
 void hasPointerParam(const Foo& foo)
+{
+}
+
+void sMallFollowedByCapital()
+{
+}
+
+TestStaticClass& TestStaticClass::operator=(const TestStaticClass& oth)
+{
+    return *this;
+}
+
+HasCopyAndMoveConstructor::HasCopyAndMoveConstructor(int value)
+{
+    field = value;
+}
+
+HasCopyAndMoveConstructor::HasCopyAndMoveConstructor(const HasCopyAndMoveConstructor &other)
+{
+    field = other.field;
+}
+
+HasCopyAndMoveConstructor::HasCopyAndMoveConstructor(HasCopyAndMoveConstructor&& other)
+{
+    field = other.field;
+}
+
+HasCopyAndMoveConstructor::~HasCopyAndMoveConstructor()
+{
+}
+
+int HasCopyAndMoveConstructor::getField()
+{
+    return field;
+}
+
+HasVirtualFunctionsWithStringParams::HasVirtualFunctionsWithStringParams()
+{
+}
+
+HasVirtualFunctionsWithStringParams::~HasVirtualFunctionsWithStringParams()
+{
+}
+
+ImplementsVirtualFunctionsWithStringParams::ImplementsVirtualFunctionsWithStringParams()
+{
+}
+
+ImplementsVirtualFunctionsWithStringParams::~ImplementsVirtualFunctionsWithStringParams()
+{
+}
+
+void ImplementsVirtualFunctionsWithStringParams::PureVirtualFunctionWithStringParams(std::string testString)
+{
+}
+
+int HasVirtualFunctionsWithStringParams::VirtualFunctionWithStringParam(std::string testString)
+{
+    return 5;
+}
+
+HasVirtualFunctionWithBoolParams::HasVirtualFunctionWithBoolParams()
+{
+}
+
+HasVirtualFunctionWithBoolParams::~HasVirtualFunctionWithBoolParams()
+{
+}
+
+bool HasVirtualFunctionWithBoolParams::virtualFunctionWithBoolParamAndReturnsBool(bool testBool)
+{
+    return testBool;
+}
+
+SecondaryBaseWithIgnoredVirtualMethod::SecondaryBaseWithIgnoredVirtualMethod()
+{
+}
+
+SecondaryBaseWithIgnoredVirtualMethod::~SecondaryBaseWithIgnoredVirtualMethod()
+{
+}
+
+void SecondaryBaseWithIgnoredVirtualMethod::generated()
+{
+}
+
+void SecondaryBaseWithIgnoredVirtualMethod::ignored(const IgnoredType& ignoredParam)
+{
+}
+
+DerivedFromSecondaryBaseWithIgnoredVirtualMethod::DerivedFromSecondaryBaseWithIgnoredVirtualMethod()
+{
+}
+
+DerivedFromSecondaryBaseWithIgnoredVirtualMethod::~DerivedFromSecondaryBaseWithIgnoredVirtualMethod()
+{
+}
+
+void DerivedFromSecondaryBaseWithIgnoredVirtualMethod::generated()
+{
+}
+
+void DerivedFromSecondaryBaseWithIgnoredVirtualMethod::ignored(const IgnoredType& ignoredParam)
 {
 }
