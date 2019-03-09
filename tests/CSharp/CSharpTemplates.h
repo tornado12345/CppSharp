@@ -1,3 +1,5 @@
+#pragma once
+
 #include "../Tests.h"
 #include "AnotherUnit.h"
 
@@ -30,6 +32,8 @@ public:
     IndependentFields();
     IndependentFields(const IndependentFields<T>& other);
     IndependentFields(const T& t);
+    IndependentFields(T1* t1);
+    IndependentFields(T2* t2);
     IndependentFields(int i);
     ~IndependentFields();
     explicit IndependentFields(const std::map<T, T> &other);
@@ -38,6 +42,7 @@ public:
     T getDependent(const T& t);
     const T* propertyReturnDependentPointer();
     static T staticDependent(const T& t);
+    void hasDefaultDependentParam(T* ptr, const T& refT = T());
     template <typename AdditionalDependentType>
     void usesAdditionalDependentType(AdditionalDependentType additionalDependentType);
     static const int independentConst;
@@ -61,6 +66,16 @@ IndependentFields<T>::IndependentFields(const IndependentFields<T>& other)
 
 template <typename T>
 IndependentFields<T>::IndependentFields(const T& t) : independent(1)
+{
+}
+
+template <typename T>
+IndependentFields<T>::IndependentFields(T1* t1) : independent(1)
+{
+}
+
+template <typename T>
+IndependentFields<T>::IndependentFields(T2* t2) : independent(1)
 {
 }
 
@@ -102,6 +117,11 @@ template <typename T>
 T IndependentFields<T>::staticDependent(const T& t)
 {
     return t;
+}
+
+template <typename T>
+void IndependentFields<T>::hasDefaultDependentParam(T* ptr, const T& refT)
+{
 }
 
 template <typename T>
@@ -202,9 +222,7 @@ DependentValueFields<T> DependentValueFields<T>::returnValue()
 template <typename T>
 DependentValueFields<T> DependentValueFields<T>::operator+(const DependentValueFields& other)
 {
-    DependentValueFields<T> sum;
-    sum.field = field + other.field;
-    return sum;
+    return DependentValueFields<T>();
 }
 
 class DLL_API DerivedFromSpecializationOfUnsupportedTemplate : public DependentValueFields<int>
@@ -256,7 +274,7 @@ private:
 };
 
 template <typename T, typename D = IndependentFields<T>>
-class HasDefaultTemplateArgument
+class DLL_API HasDefaultTemplateArgument
 {
 public:
     HasDefaultTemplateArgument();
@@ -274,7 +292,7 @@ private:
 };
 
 template <>
-class HasDefaultTemplateArgument<bool, bool>
+class DLL_API HasDefaultTemplateArgument<bool, bool>
 {
 public:
     HasDefaultTemplateArgument();
@@ -408,6 +426,12 @@ T& TemplateWithIndexer<T>::operator[](int i)
 }
 
 template <typename T>
+T& TemplateWithIndexer<T>::operator[](const T& key)
+{
+    return t[0];
+}
+
+template <typename T>
 T& TemplateWithIndexer<T>::operator[](const char* string)
 {
     return t[0];
@@ -428,6 +452,7 @@ public:
     VirtualTemplate(OptionalTemplateArgs<T> optionalTemplateArgs);
     virtual ~VirtualTemplate();
     virtual int function();
+    virtual T* function(T* t);
     DependentValueFields<float> fieldWithSpecializationType;
 };
 
@@ -457,6 +482,12 @@ int VirtualTemplate<T>::function()
     return 5;
 }
 
+template <typename T>
+T* VirtualTemplate<T>::function(T* t)
+{
+    return t;
+}
+
 class DLL_API HasVirtualTemplate
 {
 public:
@@ -470,15 +501,16 @@ private:
     HasDefaultTemplateArgument<bool, bool> explicitSpecialization;
 };
 
-class DLL_API SpecializedInterfaceForMap : InternalWithExtension<char>
+class DLL_API SpecializedInterfaceForMap : public InternalWithExtension<char>
 {
 public:
     SpecializedInterfaceForMap();
     ~SpecializedInterfaceForMap();
 };
 
-class DLL_API HasSpecializationForSecondaryBase : T1, DependentValueFields<int>, IndependentFields<int>,
-                                                  InternalWithExtension<float>, DependentPointerFields<DependentValueFields<int>>
+class DLL_API HasSpecializationForSecondaryBase : public DependentValueFields<int>,
+                                                  public IndependentFields<int>,
+                                                  public InternalWithExtension<float>
 {
 public:
     HasSpecializationForSecondaryBase();
@@ -562,7 +594,7 @@ struct MapResultType<InputSequence<T>, MapFunctor>
     typedef InputSequence<typename LazyResultType<MapFunctor>::Type> ResultType;
 };
 
-class RegularDynamic
+class DLL_API RegularDynamic
 {
 public:
     RegularDynamic();
@@ -571,7 +603,7 @@ public:
 };
 
 template<typename T>
-class TemplateDerivedFromRegularDynamic : public RegularDynamic
+class DLL_API TemplateDerivedFromRegularDynamic : public RegularDynamic
 {
 public:
     TemplateDerivedFromRegularDynamic();
@@ -606,6 +638,59 @@ enum class UsedInTemplatedIndexer
     Item2
 };
 
+template <typename T>
+class DLL_API QFlags
+{
+    typedef int Int;
+    typedef int (*Zero);
+public:
+    QFlags(T t);
+    QFlags(Zero = 0);
+    operator Int();
+private:
+    int flag;
+};
+
+template <typename T>
+QFlags<T>::QFlags(T t) : flag(Int(t))
+{
+}
+
+template <typename T>
+QFlags<T>::QFlags(Zero) : flag(Int(0))
+{
+}
+
+template <typename T>
+QFlags<T>::operator Int()
+{
+    return flag;
+}
+
+template <typename T>
+class HasCtorWithMappedToEnum
+{
+public:
+    HasCtorWithMappedToEnum(QFlags<T> t);
+    HasCtorWithMappedToEnum(T t);
+};
+
+template <typename T>
+HasCtorWithMappedToEnum<T>::HasCtorWithMappedToEnum(QFlags<T> t)
+{
+}
+
+template <typename T>
+HasCtorWithMappedToEnum<T>::HasCtorWithMappedToEnum(T t)
+{
+}
+
+enum class TestFlag
+{
+    Flag1,
+    Flag2
+};
+
 // we optimise specialisations so that only actually used ones are wrapped
 void forceUseSpecializations(IndependentFields<int> _1, IndependentFields<bool> _2,
                              IndependentFields<T1> _3, IndependentFields<std::string> _4,
@@ -613,10 +698,11 @@ void forceUseSpecializations(IndependentFields<int> _1, IndependentFields<bool> 
                              VirtualTemplate<int> _6, VirtualTemplate<bool> _7,
                              HasDefaultTemplateArgument<int, int> _8, DerivedChangesTypeName<T1> _9,
                              TemplateWithIndexer<int> _10, TemplateWithIndexer<T1> _11,
-                             TemplateWithIndexer<T2*> _12, TemplateWithIndexer<UsedInTemplatedIndexer> _13,
+                             TemplateWithIndexer<void*> _12, TemplateWithIndexer<UsedInTemplatedIndexer> _13,
                              TemplateDerivedFromRegularDynamic<RegularDynamic> _14,
                              IndependentFields<OnlySpecialisedInTypeArg<double>> _15,
-                             DependentPointerFields<float> _16, std::string s);
+                             DependentPointerFields<float> _16, IndependentFields<const T1&> _17,
+                             TemplateWithIndexer<T2*> _18, std::string s);
 
 void hasIgnoredParam(DependentValueFields<IndependentFields<Ignored>> ii);
 
@@ -624,13 +710,21 @@ std::map<int, int> usesValidSpecialisationOfIgnoredTemplate();
 
 DLL_API DependentValueFields<double> specialiseReturnOnly();
 
+template <int Size> void* qbswap(const void *source, size_t count, void *dest) noexcept;
+template<> inline void* qbswap<1>(const void *source, size_t count, void *dest) noexcept
+{
+    return 0;
+}
+
 // force the symbols for the template instantiations because we do not have the auto-compilation for the generated C++ source
 template class DLL_API IndependentFields<int>;
 template class DLL_API IndependentFields<bool>;
 template class DLL_API IndependentFields<T1>;
+template class DLL_API IndependentFields<const T1>;
 template class DLL_API IndependentFields<std::string>;
 template class DLL_API Base<int>;
 template class DLL_API DependentValueFields<int>;
+template class DLL_API DependentValueFields<int*>;
 template class DLL_API DependentValueFields<float>;
 template class DLL_API DependentPointerFields<float>;
 template class DLL_API VirtualTemplate<int>;
@@ -638,11 +732,13 @@ template class DLL_API VirtualTemplate<bool>;
 template class DLL_API HasDefaultTemplateArgument<int, int>;
 template class DLL_API DerivedChangesTypeName<T1>;
 template class DLL_API TemplateWithIndexer<int>;
+template class DLL_API TemplateWithIndexer<void*>;
 template class DLL_API TemplateWithIndexer<UsedInTemplatedIndexer>;
 template class DLL_API TemplateWithIndexer<T1>;
 template class DLL_API TemplateWithIndexer<T2*>;
 template class DLL_API TemplateWithIndexer<float>;
 template class DLL_API TemplateDerivedFromRegularDynamic<RegularDynamic>;
+template class DLL_API HasCtorWithMappedToEnum<TestFlag>;
 
 class TestForwardedClassInAnotherUnit;
 

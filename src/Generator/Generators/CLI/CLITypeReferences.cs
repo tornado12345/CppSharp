@@ -3,13 +3,14 @@ using System.IO;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 using CppSharp.Generators.AST;
+using CppSharp.Generators.C;
 using CppSharp.Types;
 
 namespace CppSharp.Generators.CLI
 {
     public class CLITypeReference : TypeReference
     {
-        public Include Include;
+        public CInclude Include;
 
         public override string ToString()
         {
@@ -107,7 +108,6 @@ namespace CppSharp.Generators.CLI
             TypeMap typeMap;
             if (TypeMapDatabase.FindTypeMap(record.Value, out typeMap))
             {
-                typeMap.Declaration = record.Value;
                 typeMap.CLITypeReference(this, record);
                 return;
             }
@@ -126,13 +126,13 @@ namespace CppSharp.Generators.CLI
             var typeRef = GetTypeReference(decl);
             if (typeRef.Include.TranslationUnit == null)
             {
-                typeRef.Include = new Include
+                typeRef.Include = new CInclude
                 {
                     File = GetIncludePath(translationUnit),
                     TranslationUnit = translationUnit,
                     Kind = translationUnit.IsGenerated
-                            ? Include.IncludeKind.Quoted
-                            : Include.IncludeKind.Angled,
+                            ? CInclude.IncludeKind.Quoted
+                            : CInclude.IncludeKind.Angled,
                 };
             }
 

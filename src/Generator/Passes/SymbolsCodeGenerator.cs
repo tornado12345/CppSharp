@@ -1,10 +1,11 @@
 ﻿using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 using CppSharp.Generators;
-using CppSharp.Parser;
+using CppSharp.Generators.C;
 
 namespace CppSharp.Passes
 {
@@ -19,6 +20,9 @@ namespace CppSharp.Passes
 
         public override void Process()
         {
+            WriteLine("#define _LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS");
+            NewLine();
+
             if (TranslationUnit.Module == Options.SystemModule)
                 WriteLine("#include <string>");
             else
@@ -61,12 +65,8 @@ namespace CppSharp.Passes
 
         private string GetExporting()
         {
-            var exporting = string.Empty;
-            if (Context.ParserOptions.IsMicrosoftAbi)
-                exporting = "__declspec(dllexport) ";
-            else if (TargetTriple.IsMacOS(Context.ParserOptions.TargetTriple))
-                exporting = "__attribute__((visibility(\"default\"))) ";
-            return exporting;
+            return Context.ParserOptions.IsMicrosoftAbi ?
+                "__declspec(dllexport) " : string.Empty;
         }
 
         private string GetWrapper(Module module)
@@ -110,7 +110,7 @@ namespace CppSharp.Passes
                     p => cppTypePrinter.VisitParameter(p)))})");
                 WriteLine($": {@namespace}({@params}) {{}} }};");
                 Write($"extern \"C\" {{ void {wrapper}({signature}) ");
-                WriteLine($"{{ new (instance) {wrapper}{@namespace}({@params}); }} }}");
+                WriteLine($"{{ new ({Helpers.InstanceField}) {wrapper}{@namespace}({@params}); }} }}");
             }
             else
             {
@@ -119,7 +119,7 @@ namespace CppSharp.Passes
                     Write($@"{{ class {wrapper}{method.Namespace.Namespace.Name} : public {
                         method.Namespace.Namespace.Visit(cppTypePrinter)} ");
                 Write($"{{ void {wrapper}({signature}) ");
-                Write($"{{ new (instance) {@namespace}({@params}); }} }}");
+                Write($"{{ new ({Helpers.InstanceField}) {@namespace}({@params}); }} }}");
                 if (method.Namespace.Access == AccessSpecifier.Protected)
                     Write("; }");
                 NewLine();
@@ -162,13 +162,13 @@ namespace CppSharp.Passes
             Write($"void {wrapper}");
             if (isProtected)
                 Write("protected");
-            Write($@"({@namespace}* instance) {{ instance->~{
-                method.Namespace.OriginalName}(); }} }}");
+            Write($@"({@namespace}* {Helpers.InstanceField}) {{ {
+                Helpers.InstanceField}->~{method.Namespace.OriginalName}(); }} }}");
             if (isProtected)
             {
                 NewLine();
-                Write($@"void {wrapper}({@namespace} instance) {{ {
-                   wrapper}{@namespace}::{wrapper}protected(instance); }}");
+                Write($@"void {wrapper}({@namespace} {Helpers.InstanceField}) {{ {
+                   wrapper}{@namespace}::{wrapper}protected({Helpers.InstanceField}); }}");
             }
             if (method.Namespace.Access == AccessSpecifier.Protected)
                 Write("; }");
@@ -241,7 +241,20 @@ namespace CppSharp.Passes
                 string.Empty : (@namespace + "::"))}{function.OriginalName}{
                 (function.SpecializationInfo == null ? string.Empty : $@"<{
                     string.Join(", ", function.SpecializationInfo.Arguments.Select(
-                        a => a.Type.Visit(cppTypePrinter)))}>")}";
+                        a =>
+                        {
+                            switch (a.Kind)
+                            {
+                                case TemplateArgument.ArgumentKind.Type:
+                                    return a.Type.Visit(cppTypePrinter).Type;
+                                case TemplateArgument.ArgumentKind.Declaration:
+                                    return a.Declaration.Visit(cppTypePrinter).Type;
+                                case TemplateArgument.ArgumentKind.Integral:
+                                    return a.Integral.ToString(CultureInfo.InvariantCulture);
+                            }
+                            throw new System.ArgumentOutOfRangeException(
+                                nameof(a.Kind), a.Kind, "Unsupported kind of template argument.");
+                        }))}>")}";
         }
 
         private void WriteRedeclaration(Function function, string returnType,
@@ -292,7 +305,7 @@ namespace CppSharp.Passes
 
         private CppTypePrinter cppTypePrinter = new CppTypePrinter
         {
-            PrintScopeKind = TypePrintScopeKind.Qualified
+            ScopeKind = TypePrintScopeKind.Qualified
         };
         private int functionCount;
     }

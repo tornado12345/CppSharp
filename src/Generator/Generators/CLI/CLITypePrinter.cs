@@ -25,9 +25,8 @@ namespace CppSharp.Generators.CLI
             TypeMap typeMap = null;
             if (TypeMapDatabase.FindTypeMap(tag, out typeMap))
             {
-                typeMap.Type = tag;
                 var typePrinterContext = new TypePrinterContext { Type = tag };
-                return typeMap.CLISignature(typePrinterContext);
+                return typeMap.CLISignatureType(typePrinterContext).ToString();
             }
 
             Declaration decl = tag.Declaration;
@@ -108,6 +107,19 @@ namespace CppSharp.Generators.CLI
         public override TypePrinterResult VisitPointerType(PointerType pointer,
             TypeQualifiers quals)
         {
+            TypeMap typeMap;
+            if (Context.TypeMaps.FindTypeMap(pointer.Desugar(), out typeMap))
+            {
+                var typePrinterContext = new TypePrinterContext
+                {
+                    Kind = ContextKind,
+                    MarshalKind = MarshalKind,
+                    Type = pointer
+                };
+                
+                return typeMap.CLISignatureType(typePrinterContext).Visit(this);
+            }
+
             var pointee = pointer.Pointee.Desugar();
 
             if (pointee is FunctionType)
@@ -115,9 +127,6 @@ namespace CppSharp.Generators.CLI
                 var function = pointee as FunctionType;
                 return string.Format("{0}^", function.Visit(this, quals));
             }
-
-            if (pointer.IsConstCharString())
-                return "System::String^";
 
             // From http://msdn.microsoft.com/en-us/library/y31yhkeb.aspx
             // Any of the following types may be a pointer type:
@@ -198,15 +207,15 @@ namespace CppSharp.Generators.CLI
             var decl = typedef.Declaration;
 
             TypeMap typeMap = null;
-            if (TypeMapDatabase.FindTypeMap(decl, out typeMap))
+            if (TypeMapDatabase.FindTypeMap(decl.Type, out typeMap))
             {
                 typeMap.Type = typedef;
                 var typePrinterContext = new TypePrinterContext { Type = typedef };
-                return typeMap.CLISignature(typePrinterContext);
+                return typeMap.CLISignatureType(typePrinterContext).ToString();
             }
 
             FunctionType func;
-            if (decl.Type.IsPointerTo<FunctionType>(out func))
+            if (decl.Type.IsPointerTo(out func))
             {
                 // TODO: Use SafeIdentifier()
                 return string.Format("{0}^", VisitDeclaration(decl));
@@ -225,10 +234,8 @@ namespace CppSharp.Generators.CLI
             TypeMap typeMap = null;
             if (TypeMapDatabase.FindTypeMap(template, out typeMap) && !typeMap.IsIgnored)
             {
-                typeMap.Declaration = decl;
-                typeMap.Type = template;
                 var typePrinterContext = new TypePrinterContext { Type = template };
-                return typeMap.CLISignature(typePrinterContext);
+                return typeMap.CLISignatureType(typePrinterContext).ToString();
             }
 
             return decl.Name;
@@ -264,7 +271,7 @@ namespace CppSharp.Generators.CLI
             DependentNameType dependent, TypeQualifiers quals)
         {
             return dependent.Qualifier.Type != null ?
-                dependent.Qualifier.Visit(this) : string.Empty;
+                dependent.Qualifier.Visit(this).Type : string.Empty;
         }
 
         public override TypePrinterResult VisitPackExpansionType(
@@ -287,6 +294,11 @@ namespace CppSharp.Generators.CLI
             if (!type.Type.IsValueType)
                 result += "^";
             return result;
+        }
+
+        public override TypePrinterResult VisitUnsupportedType(UnsupportedType type, TypeQualifiers quals)
+        {
+            return type.Description;
         }
 
         public override TypePrinterResult VisitDeclaration(Declaration decl)

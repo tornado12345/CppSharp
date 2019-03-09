@@ -1,13 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 
 namespace CppSharp
 {
     public interface ITextGenerator
     {
-        uint Indent { get; }
         void Write(string msg, params object[] args);
         void WriteLine(string msg, params object[] args);
         void WriteLineIndent(string msg, params object[] args);
@@ -15,31 +12,23 @@ namespace CppSharp
         void NewLineIfNeeded();
         void NeedNewLine();
         void ResetNewLine();
-        void PushIndent(uint indent = TextGenerator.DefaultIndent);
-        void PopIndent();
-        void WriteStartBraceIndent();
-        void WriteCloseBraceIndent();
+        void Indent(uint indentation = TextGenerator.DefaultIndentation);
+        void Unindent();
+        void WriteOpenBraceAndIndent();
+        void UnindentAndWriteCloseBrace();
     }
 
     public class TextGenerator : ITextGenerator
     {
-        public const uint DefaultIndent = 4;
+        public const uint DefaultIndentation = 4;
 
-        public StringBuilder StringBuilder;
-        protected bool IsStartOfLine;
-        protected bool NeedsNewLine;
-        protected readonly Stack<uint> CurrentIndent;
-
-        public uint Indent
-        {
-            get { return (uint)CurrentIndent.Sum(u => (int)u); }
-        }
+        public StringBuilder StringBuilder = new StringBuilder();
+        public bool IsStartOfLine { get; set; }
+        public bool NeedsNewLine { get; set; }
+        public uint CurrentIndentation { get; set; }
 
         public TextGenerator()
         {
-            StringBuilder = new StringBuilder();
-            IsStartOfLine = false;
-            CurrentIndent = new Stack<uint>();
         }
 
         public TextGenerator(TextGenerator generator)
@@ -47,7 +36,7 @@ namespace CppSharp
             StringBuilder = new StringBuilder(generator);
             IsStartOfLine = generator.IsStartOfLine;
             NeedsNewLine = generator.NeedsNewLine;
-            CurrentIndent = new Stack<uint>(generator.CurrentIndent);
+            CurrentIndentation = generator.CurrentIndentation;
         }
 
         public TextGenerator Clone()
@@ -63,16 +52,14 @@ namespace CppSharp
             if (args.Length > 0)
                 msg = string.Format(msg, args);
 
-            foreach(var line in msg.SplitAndKeep(Environment.NewLine))
-            {
-                if (IsStartOfLine && !string.IsNullOrWhiteSpace(line))
-                    StringBuilder.Append(new string(' ', (int) CurrentIndent.Sum(u => u)));
+            if (IsStartOfLine && !string.IsNullOrWhiteSpace(msg))
+                StringBuilder.Append(new string(' ',
+                    (int) (CurrentIndentation * DefaultIndentation)));
 
-                if (line.Length > 0)
-                    IsStartOfLine = line.EndsWith(Environment.NewLine);
+            if (msg.Length > 0)
+                IsStartOfLine = msg.EndsWith(Environment.NewLine);
 
-                StringBuilder.Append(line);
-            }
+            StringBuilder.Append(msg);
         }
 
         public void WriteLine(string msg, params object[] args)
@@ -83,9 +70,9 @@ namespace CppSharp
 
         public void WriteLineIndent(string msg, params object[] args)
         {
-            PushIndent();
+            Indent();
             WriteLine(msg, args);
-            PopIndent();
+            Unindent();
         }
 
         public void NewLine()
@@ -112,25 +99,25 @@ namespace CppSharp
             NeedsNewLine = false;
         }
 
-        public void PushIndent(uint indent = DefaultIndent)
+        public void Indent(uint indentation = 1)
         {
-            CurrentIndent.Push(indent);
+            CurrentIndentation++;
         }
 
-        public void PopIndent()
+        public void Unindent()
         {
-            CurrentIndent.Pop();
+            CurrentIndentation--;
         }
 
-        public void WriteStartBraceIndent()
+        public void WriteOpenBraceAndIndent()
         {
             WriteLine("{");
-            PushIndent();
+            Indent();
         }
 
-        public void WriteCloseBraceIndent()
+        public void UnindentAndWriteCloseBrace()
         {
-            PopIndent();
+            Unindent();
             WriteLine("}");
         }
 

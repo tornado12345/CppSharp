@@ -13,16 +13,23 @@ namespace CppSharp.Generators.CSharp
 {
     public class CSharpTypePrinter : TypePrinter
     {
-        public const string IntPtrType = "global::System.IntPtr";
+        public string IntPtrType => QualifiedType("System.IntPtr");
 
         public BindingContext Context { get; set; }
 
         public DriverOptions Options => Context.Options;
         public TypeMapDatabase TypeMapDatabase => Context.TypeMaps;
 
+        public bool PrintModuleOutputNamespace = true;
+
         public CSharpTypePrinter(BindingContext context)
         {
             Context = context;
+        }
+
+        public string QualifiedType(string name)
+        {
+            return IsGlobalQualifiedScope ? $"global::{name}" : name;
         }
 
         public override TypePrinterResult VisitTagType(TagType tag, TypeQualifiers quals)
@@ -31,7 +38,7 @@ namespace CppSharp.Generators.CSharp
                 return string.Empty;
 
             TypeMap typeMap;
-            if (TypeMapDatabase.FindTypeMap(tag.Declaration, out typeMap))
+            if (TypeMapDatabase.FindTypeMap(tag, out typeMap))
             {
                 typeMap.Type = tag;
 
@@ -42,15 +49,7 @@ namespace CppSharp.Generators.CSharp
                     Type = tag
                 };
 
-                string type = typeMap.CSharpSignature(typePrinterContext);
-                if (!string.IsNullOrEmpty(type))
-                {
-                    return new TypePrinterResult
-                    {
-                        Type = type,
-                        TypeMap = typeMap
-                    };
-                }
+                return typeMap.CSharpSignatureType(typePrinterContext).ToString();
             }
 
             return base.VisitTagType(tag, quals);
@@ -141,6 +140,23 @@ namespace CppSharp.Generators.CSharp
             return $"{arrayType.Visit(this)}{arraySuffix}";
         }
 
+        public override TypePrinterResult VisitBuiltinType(BuiltinType builtin, TypeQualifiers quals)
+        {
+            TypeMap typeMap;
+            if (TypeMapDatabase.FindTypeMap(builtin, out typeMap))
+            {
+                var typePrinterContext = new TypePrinterContext()
+                {
+                    Kind = Kind,
+                    MarshalKind = MarshalKind,
+                    Type = builtin,
+                    Parameter = Parameter
+                };
+                return typeMap.CSharpSignatureType(typePrinterContext).Visit(this);
+            }
+            return base.VisitBuiltinType(builtin, quals);
+        }
+
         public override TypePrinterResult VisitFunctionType(FunctionType function,
             TypeQualifiers quals)
         {
@@ -182,7 +198,7 @@ namespace CppSharp.Generators.CSharp
         public override TypePrinterResult VisitPointerType(PointerType pointer,
             TypeQualifiers quals)
         {
-            if (MarshalKind == MarshalKind.NativeField)
+            if (MarshalKind == MarshalKind.NativeField && !pointer.Pointee.IsEnumType())
                 return IntPtrType;
 
             if (pointer.Pointee is FunctionType)
@@ -192,16 +208,16 @@ namespace CppSharp.Generators.CSharp
 
             if (allowStrings && pointer.IsConstCharString())
             {
-                if (isManagedContext)
-                    return "string";
-                if (Parameter == null || Parameter.Name == Helpers.ReturnIdentifier)
-                    return IntPtrType;
-                if (Options.Encoding == Encoding.ASCII)
-                    return string.Format("[MarshalAs(UnmanagedType.LPStr)] string");
-                if (Options.Encoding == Encoding.Unicode ||
-                    Options.Encoding == Encoding.BigEndianUnicode)
-                    return string.Format("[MarshalAs(UnmanagedType.LPWStr)] string");
-                throw new NotSupportedException($"{Options.Encoding.EncodingName} is not supported yet.");
+                TypeMap typeMap;
+                TypeMapDatabase.FindTypeMap(pointer, out typeMap);
+                var typePrinterContext = new TypePrinterContext()
+                {
+                    Kind = Kind,
+                    MarshalKind = MarshalKind,
+                    Type = pointer.Pointee,
+                    Parameter = Parameter
+                };
+                return typeMap.CSharpSignatureType(typePrinterContext).Visit(this);
             }
 
             var pointee = pointer.Pointee.Desugar();
@@ -217,7 +233,7 @@ namespace CppSharp.Generators.CSharp
             // * Any enum type.
             // * Any pointer type.
             // * Any user-defined struct type that contains fields of unmanaged types only.
-            var finalPointee = pointer.GetFinalPointee();
+            var finalPointee = (pointee.GetFinalPointee() ?? pointee).Desugar();
             if (finalPointee.IsPrimitiveType())
             {
                 // Skip one indirection if passed by reference
@@ -279,7 +295,7 @@ namespace CppSharp.Generators.CSharp
             var decl = typedef.Declaration;
 
             TypeMap typeMap;
-            if (TypeMapDatabase.FindTypeMap(decl, out typeMap))
+            if (TypeMapDatabase.FindTypeMap(decl.Type, out typeMap))
             {
                 typeMap.Type = typedef;
 
@@ -290,15 +306,7 @@ namespace CppSharp.Generators.CSharp
                     Type = typedef
                 };
 
-                string type = typeMap.CSharpSignature(typePrinterContext);
-                if (!string.IsNullOrEmpty(type))
-                {
-                    return new TypePrinterResult
-                    {
-                        Type = type,
-                        TypeMap = typeMap
-                    };
-                }
+                return typeMap.CSharpSignatureType(typePrinterContext).ToString();
             }
 
             FunctionType func = decl.Type as FunctionType;
@@ -340,7 +348,6 @@ namespace CppSharp.Generators.CSharp
                 return decl.Visit(this);
             }
 
-            typeMap.Declaration = decl;
             typeMap.Type = template;
 
             var typePrinterContext = new TypePrinterContext
@@ -350,17 +357,7 @@ namespace CppSharp.Generators.CSharp
                 MarshalKind = MarshalKind
             };
 
-            var type = typeMap.CSharpSignature(typePrinterContext);
-            if (!string.IsNullOrEmpty(type))
-            {
-                return new TypePrinterResult
-                {
-                    Type = type,
-                    TypeMap = typeMap
-                };
-            }
-
-            return decl.Visit(this);
+            return typeMap.CSharpSignatureType(typePrinterContext).ToString();
         }
 
         public override TypePrinterResult VisitDependentTemplateSpecializationType(
@@ -408,7 +405,39 @@ namespace CppSharp.Generators.CSharp
 
         public override TypePrinterResult VisitCILType(CILType type, TypeQualifiers quals)
         {
-            return type.Type.FullName;
+            switch (System.Type.GetTypeCode(type.Type))
+            {
+                case TypeCode.Boolean:
+                    return "bool";
+                case TypeCode.Char:
+                    return "char";
+                case TypeCode.SByte:
+                    return "sbyte";
+                case TypeCode.Byte:
+                    return "byte";
+                case TypeCode.Int16:
+                    return "short";
+                case TypeCode.UInt16:
+                    return "ushort";
+                case TypeCode.Int32:
+                    return "int";
+                case TypeCode.UInt32:
+                    return "uint";
+                case TypeCode.Int64:
+                    return "long";
+                case TypeCode.UInt64:
+                    return "ulong";
+                case TypeCode.Single:
+                    return "float";
+                case TypeCode.Double:
+                    return "double";
+                case TypeCode.Decimal:
+                    return "decimal";
+                case TypeCode.String:
+                    return "string";
+            }
+
+            return QualifiedType(type.Type.FullName);
         }
 
         public static void GetPrimitiveTypeWidth(PrimitiveType primitive,
@@ -524,7 +553,7 @@ namespace CppSharp.Generators.CSharp
                 case PrimitiveType.LongDouble: return new TypePrinterResult { Type = "fixed byte",
                     NameSuffix = $"[{Context.TargetInfo.LongDoubleWidth}]"};
                 case PrimitiveType.IntPtr: return IntPtrType;
-                case PrimitiveType.UIntPtr: return "global::System.UIntPtr";
+                case PrimitiveType.UIntPtr: return QualifiedType("System.UIntPtr");
                 case PrimitiveType.Null: return "void*";
                 case PrimitiveType.String: return "string";
                 case PrimitiveType.Float128: return "__float128";
@@ -566,7 +595,7 @@ namespace CppSharp.Generators.CSharp
                 return a.Integral.ToString(CultureInfo.InvariantCulture);
             var type = a.Type.Type.Desugar();
             return type.IsPointerToPrimitiveType() ? IntPtrType :
-                type.IsPrimitiveType(PrimitiveType.Void) ? "object" : type.Visit(this);
+                type.IsPrimitiveType(PrimitiveType.Void) ? "object" : type.Visit(this).Type;
         }
 
         public override TypePrinterResult VisitParameterDecl(Parameter parameter)
@@ -619,12 +648,15 @@ namespace CppSharp.Generators.CSharp
                 ctx = ctx.Namespace;
             }
 
-            var unit = ctx.TranslationUnit;
-            if (!unit.IsSystemHeader && unit.IsValid &&
-                !string.IsNullOrWhiteSpace(unit.Module.OutputNamespace))
-                names.Push(unit.Module.OutputNamespace);
+            if (PrintModuleOutputNamespace)
+            {
+                var unit = ctx.TranslationUnit;
+                if (!unit.IsSystemHeader && unit.IsValid &&
+                    !string.IsNullOrWhiteSpace(unit.Module.OutputNamespace))
+                    names.Push(unit.Module.OutputNamespace);
+            }
 
-            return $"global::{string.Join(".", names)}";
+            return QualifiedType(string.Join(".", names));
         }
 
         public override TypePrinterResult VisitParameters(IEnumerable<Parameter> @params,
@@ -707,6 +739,11 @@ namespace CppSharp.Generators.CSharp
             return vectorType.ElementType.Visit(this);
         }
 
+        public override TypePrinterResult VisitUnsupportedType(UnsupportedType type, TypeQualifiers quals)
+        {
+            return type.Description;
+        }
+
         private static string GetParameterUsage(ParameterUsage usage)
         {
             switch (usage)
@@ -765,6 +802,40 @@ namespace CppSharp.Generators.CSharp
             var typePrinterResult = type.Visit(this);
             PopContext();
             return typePrinterResult;
+        }
+
+        public static Type GetSignedType(uint width)
+        {
+            switch (width)
+            {
+                case 8:
+                    return new CILType(typeof(sbyte));
+                case 16:
+                    return new CILType(typeof(short));
+                case 32:
+                    return new CILType(typeof(int));
+                case 64:
+                    return new CILType(typeof(long));
+                default:
+                    throw new System.NotSupportedException();
+            }
+        }
+
+        public static Type GetUnsignedType(uint width)
+        {
+            switch (width)
+            {
+                case 8:
+                    return new CILType(typeof(byte));
+                case 16:
+                    return new CILType(typeof(ushort));
+                case 32:
+                    return new CILType(typeof(uint));
+                case 64:
+                    return new CILType(typeof(ulong));
+                default:
+                    throw new System.NotSupportedException();
+            }
         }
 
         private static bool IsValid(TemplateArgument a)

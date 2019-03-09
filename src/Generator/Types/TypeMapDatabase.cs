@@ -3,33 +3,24 @@ using System.Collections.Generic;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 using CppSharp.Generators;
-using CppSharp.Generators.AST;
-using CppSharp.Generators.CLI;
-using CppSharp.Generators.CSharp;
-using Attribute = System.Attribute;
+using CppSharp.Generators.C;
 using Type = CppSharp.AST.Type;
 
 namespace CppSharp.Types
 {
     public class TypeMapDatabase : ITypeMapDatabase
     {
-        public IDictionary<string, System.Type> TypeMaps { get; set; }
+        public IDictionary<string, TypeMap> TypeMaps { get; set; }
 
-        public TypeMapDatabase()
+        public TypeMapDatabase(BindingContext bindingContext)
         {
-            TypeMaps = new Dictionary<string, System.Type>();
-        }
-
-        public void SetupTypeMaps(GeneratorKind generatorKind)
-        {
-            var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies();
-
-            foreach (var assembly in loadedAssemblies)
+            TypeMaps = new Dictionary<string, TypeMap>();
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
                 try
                 {
                     var types = assembly.FindDerivedTypes(typeof(TypeMap));
-                    SetupTypeMaps(types, generatorKind);
+                    SetupTypeMaps(types, bindingContext);
                 }
                 catch (System.Reflection.ReflectionTypeLoadException ex)
                 {
@@ -39,152 +30,89 @@ namespace CppSharp.Types
             }
         }
 
-        private void SetupTypeMaps(IEnumerable<System.Type> types, GeneratorKind generatorKind)
+        private void SetupTypeMaps(IEnumerable<System.Type> types,
+            BindingContext bindingContext)
         {
-            foreach (var typeMap in types)
+            foreach (var type in types)
             {
-                var attrs = typeMap.GetCustomAttributes(typeof(TypeMapAttribute), true);
+                var attrs = type.GetCustomAttributes(typeof(TypeMapAttribute), true);
                 foreach (TypeMapAttribute attr in attrs)
                 {
-                    if (attr.GeneratorKind == 0 || attr.GeneratorKind == generatorKind)
+                    if (attr.GeneratorKind == 0 ||
+                        attr.GeneratorKind == bindingContext.Options.GeneratorKind)
                     {
-                        TypeMaps[attr.Type] = typeMap;
+                        var typeMap = (TypeMap) Activator.CreateInstance(type);
+                        typeMap.Context = bindingContext;
+                        typeMap.TypeMapDatabase = this;
+                        this.TypeMaps[attr.Type] = typeMap;
                     }
                 }
             }
         }
 
-        public bool FindTypeMap(Declaration decl, Type type, out TypeMap typeMap)
-        {
-            // We try to find type maps from the most qualified to less qualified
-            // types. Example: '::std::vector', 'std::vector' and 'vector'
-
-            var typePrinter = new CppTypePrinter { PrintLogicalNames = true };
-
-            if (FindTypeMap(decl.Visit(typePrinter), out typeMap))
-            {
-                typeMap.Declaration = decl;
-                typeMap.Type = type;
-                return true;
-            }
-
-            typePrinter.PrintScopeKind = TypePrintScopeKind.Qualified;
-            if (FindTypeMap(decl.Visit(typePrinter), out typeMap))
-            {
-                typeMap.Declaration = decl;
-                typeMap.Type = type;
-                return true;
-            }
-
-            typePrinter.ResolveTypedefs = true;
-            if (FindTypeMap(decl.Visit(typePrinter), out typeMap))
-            {
-                typeMap.Declaration = decl;
-                typeMap.Type = type;
-                return true;
-            }
-            typePrinter.ResolveTypedefs = false;
-
-            typePrinter.PrintScopeKind = TypePrintScopeKind.Local;
-            if (FindTypeMap(decl.Visit(typePrinter), out typeMap))
-            {
-                typeMap.Declaration = decl;
-                typeMap.Type = type;
-                return true;
-            }
-
-            var specialization = decl as ClassTemplateSpecialization;
-            if (specialization != null &&
-                FindTypeMap(specialization.TemplatedDecl.Visit(typePrinter), out typeMap))
-            {
-                typeMap.Declaration = decl;
-                typeMap.Type = type;
-                return true;
-            }
-
-            var typedef = decl as TypedefDecl;
-            return typedef != null && FindTypeMap(typedef.Type, out typeMap);
-        }
-
         public bool FindTypeMap(Type type, out TypeMap typeMap)
         {
-            var typePrinter = new CppTypePrinter
+            if (typeMaps.ContainsKey(type))
             {
-                PrintTypeQualifiers = false,
-                PrintTypeModifiers = false,
-                PrintLogicalNames = true
-            };
+                typeMap = typeMaps[type];
+                return typeMap.IsEnabled;
+            }
 
             var template = type as TemplateSpecializationType;
             if (template != null)
             {
                 var specialization = template.GetClassTemplateSpecialization();
-                if (specialization != null && FindTypeMap(specialization, type, out typeMap))
+                if (specialization != null &&
+                    FindTypeMap(specialization, out typeMap))
                     return true;
                 if (template.Template.TemplatedDecl != null)
-                    return FindTypeMap(template.Template.TemplatedDecl, type,
-                        out typeMap);
-            }
-
-            typePrinter.PrintScopeKind = TypePrintScopeKind.Local;
-            if (FindTypeMap(type.Visit(typePrinter), out typeMap))
-            {
-                typeMap.Type = type;
-                return true;
-            }
-
-            typePrinter.PrintScopeKind = TypePrintScopeKind.Qualified;
-            if (FindTypeMap(type.Visit(typePrinter), out typeMap))
-            {
-                typeMap.Type = type;
-                return true;
-            }
-
-            var typedef = type as TypedefType;
-            return typedef != null && FindTypeMap(typedef.Declaration, type, out typeMap);
-        }
-
-        public bool FindTypeMap(Declaration decl, out TypeMap typeMap)
-        {
-            return FindTypeMap(decl, null, out typeMap);
-        }
-
-        public bool FindTypeMapRecursive(Type type, out TypeMap typeMap)
-        {
-            while (true)
-            {
-                if (FindTypeMap(type, out typeMap))
-                    return true;
-
-                var desugaredType = type.Desugar();
-                if (desugaredType == type)
+                {
+                    if (FindTypeMap(template.Template.TemplatedDecl,
+                        out typeMap))
+                    {
+                        typeMap.Type = type;
+                        return true;
+                    }
                     return false;
-
-                type = desugaredType;
+                }
             }
+
+            Type desugared = type.Desugar();
+            desugared = (desugared.GetFinalPointee() ?? desugared).Desugar();
+            bool printExtra = desugared.IsPrimitiveType() ||
+                (desugared.GetFinalPointee() ?? desugared).Desugar().IsPrimitiveType();
+            var typePrinter = new CppTypePrinter
+            {
+                PrintTypeQualifiers = printExtra,
+                PrintTypeModifiers = printExtra,
+                PrintLogicalNames = true
+            };
+
+            foreach (var resolveTypeDefs in new[] { true, false })
+                foreach (var typePrintScopeKind in
+                    new[] { TypePrintScopeKind.Local, TypePrintScopeKind.Qualified })
+                {
+                    typePrinter.ResolveTypedefs = resolveTypeDefs;
+                    typePrinter.ScopeKind = typePrintScopeKind;
+                    if (FindTypeMap(type.Visit(typePrinter), out typeMap))
+                    {
+                        typeMap.Type = type;
+                        typeMaps[type] = typeMap;
+                        return true;
+                    }
+                }
+
+            typeMap = null;
+            var typedef = type as TypedefType;
+            return typedef != null && FindTypeMap(typedef.Declaration.Type, out typeMap);
         }
 
-        public bool FindTypeMap(string name, out TypeMap typeMap)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                typeMap = null;
-                return false;
-            }
+        public bool FindTypeMap(Declaration declaration, out TypeMap typeMap) =>
+            FindTypeMap(new TagType(declaration), out typeMap);
 
-            System.Type type;
-            TypeMaps.TryGetValue(name, out type);
+        public bool FindTypeMap(string name, out TypeMap typeMap) =>
+            TypeMaps.TryGetValue(name, out typeMap) && typeMap.IsEnabled;
 
-            if (type == null)
-            {
-                typeMap = null;
-                return false;
-            }
-
-            typeMap = (TypeMap)Activator.CreateInstance(type);
-            typeMap.TypeMapDatabase = this;
-
-            return true;
-        }
+        private Dictionary<Type, TypeMap> typeMaps = new Dictionary<Type, TypeMap>();
     }
 }

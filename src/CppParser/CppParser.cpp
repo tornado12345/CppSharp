@@ -19,6 +19,9 @@ CppParserOptions::CppParserOptions()
     , microsoftMode(false)
     , verbose(false)
     , unityBuild(false)
+    , skipPrivateDeclarations(true)
+    , skipLayoutInfo(false)
+    , skipFunctionBodies(true)
 {
 }
 

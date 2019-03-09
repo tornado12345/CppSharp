@@ -52,7 +52,7 @@ namespace CppSharp
         Fields,
     }
 
-    [DebuggerDisplay("{BlockKind} | {Object}")]
+    [DebuggerDisplay("{Kind} | {Object}")]
     public class Block : ITextGenerator
     {
         public TextGenerator Text { get; set; }
@@ -65,7 +65,6 @@ namespace CppSharp
         public List<Block> Blocks { get; set; }
 
         private bool hasIndentChanged;
-        private bool isSubBlock;
 
         public Func<bool> CheckGenerate;
 
@@ -80,7 +79,6 @@ namespace CppSharp
             Blocks = new List<Block>();
             Text = new TextGenerator();
             hasIndentChanged = false;
-            isSubBlock = false;
         }
 
         public void AddBlock(Block block)
@@ -88,7 +86,7 @@ namespace CppSharp
             if (Text.StringBuilder.Length != 0 || hasIndentChanged)
             {
                 hasIndentChanged = false;
-                var newBlock = new Block { Text = Text.Clone(), isSubBlock = true };
+                var newBlock = new Block { Text = Text.Clone() };
                 Text.StringBuilder.Clear();
 
                 AddBlock(newBlock);
@@ -110,16 +108,15 @@ namespace CppSharp
             }
         }
 
-        public virtual string Generate()
+        public virtual StringBuilder Generate()
         {
             if (CheckGenerate != null && !CheckGenerate())
-                return "";
+                return new StringBuilder();
 
             if (Blocks.Count == 0)
-                return Text.ToString();
+                return Text.StringBuilder;
 
             var builder = new StringBuilder();
-            uint totalIndent = 0;
             Block previousBlock = null;
 
             var blockIndex = 0;
@@ -135,7 +132,7 @@ namespace CppSharp
                 if (nextBlock != null)
                 {
                     var nextText = nextBlock.Generate();
-                    if (string.IsNullOrEmpty(nextText) &&
+                    if (nextText.Length == 0 &&
                         childBlock.NewLineKind == NewLineKind.IfNotEmpty)
                         skipBlock = true;
                 }
@@ -143,36 +140,17 @@ namespace CppSharp
                 if (skipBlock)
                     continue;
 
-                if (string.IsNullOrEmpty(childText))
+                if (childText.Length == 0)
                     continue;
-
-                var lines = childText.SplitAndKeep(Environment.NewLine).ToList();
 
                 if (previousBlock != null &&
                     previousBlock.NewLineKind == NewLineKind.BeforeNextBlock)
                     builder.AppendLine();
 
-                if (childBlock.isSubBlock)
-                    totalIndent = 0;
-
-                foreach (var line in lines)
-                {
-                    if (string.IsNullOrEmpty(line))
-                        continue;
-
-                    if (!string.IsNullOrWhiteSpace(line))
-                        builder.Append(new string(' ', (int)totalIndent));
-
-                    builder.Append(line);
-
-                    if (!line.EndsWith(Environment.NewLine, StringComparison.Ordinal))
-                        builder.AppendLine();
-                }
+                builder.Append(childText);
 
                 if (childBlock.NewLineKind == NewLineKind.Always)
                     builder.AppendLine();
-
-                totalIndent += childBlock.Text.Indent;
 
                 previousBlock = childBlock;
             }
@@ -180,7 +158,7 @@ namespace CppSharp
             if (Text.StringBuilder.Length != 0)
                 builder.Append(Text.StringBuilder);
 
-            return builder.ToString();
+            return builder;
         }
 
         public bool IsEmpty
@@ -195,8 +173,6 @@ namespace CppSharp
         }
 
         #region ITextGenerator implementation
-
-        public uint Indent { get { return Text.Indent; } }
 
         public void Write(string msg, params object[] args)
         {
@@ -233,26 +209,26 @@ namespace CppSharp
             Text.ResetNewLine();
         }
 
-        public void PushIndent(uint indent = 4u)
+        public void Indent(uint indentation = 4u)
         {
             hasIndentChanged = true;
-            Text.PushIndent(indent);
+            Text.Indent(indentation);
         }
 
-        public void PopIndent()
+        public void Unindent()
         {
             hasIndentChanged = true;
-            Text.PopIndent();
+            Text.Unindent();
         }
 
-        public void WriteStartBraceIndent()
+        public void WriteOpenBraceAndIndent()
         {
-            Text.WriteStartBraceIndent();
+            Text.WriteOpenBraceAndIndent();
         }
 
-        public void WriteCloseBraceIndent()
+        public void UnindentAndWriteCloseBrace()
         {
-            Text.WriteCloseBraceIndent();
+            Text.UnindentAndWriteCloseBrace();
         }
 
         #endregion
@@ -260,8 +236,9 @@ namespace CppSharp
 
     public abstract class BlockGenerator : ITextGenerator
     {
-        public Block RootBlock { get; private set; }
+        public Block RootBlock { get; }
         public Block ActiveBlock { get; private set; }
+        public uint CurrentIndentation => ActiveBlock.Text.CurrentIndentation;
 
         protected BlockGenerator()
         {
@@ -271,7 +248,7 @@ namespace CppSharp
 
         public virtual string Generate()
         {
-            return RootBlock.Generate();
+            return RootBlock.Generate().ToString();
         }
 
         #region Block helpers
@@ -284,6 +261,9 @@ namespace CppSharp
         public void PushBlock(BlockKind kind = BlockKind.Unknown, object obj = null)
         {
             var block = new Block { Kind = kind, Object = obj };
+            block.Text.CurrentIndentation = CurrentIndentation;
+            block.Text.IsStartOfLine = ActiveBlock.Text.IsStartOfLine;
+            block.Text.NeedsNewLine = ActiveBlock.Text.NeedsNewLine;
             PushBlock(block);
         }
 
@@ -317,8 +297,6 @@ namespace CppSharp
         #endregion
 
         #region ITextGenerator implementation
-
-        public uint Indent { get { return ActiveBlock.Indent; } }
 
         public void Write(string msg, params object[] args)
         {
@@ -355,24 +333,24 @@ namespace CppSharp
             ActiveBlock.ResetNewLine();
         }
 
-        public void PushIndent(uint indent = 4u)
+        public void Indent(uint indentation = 4u)
         {
-            ActiveBlock.PushIndent(indent);
+            ActiveBlock.Indent(indentation);
         }
 
-        public void PopIndent()
+        public void Unindent()
         {
-            ActiveBlock.PopIndent();
+            ActiveBlock.Unindent();
         }
 
-        public void WriteStartBraceIndent()
+        public void WriteOpenBraceAndIndent()
         {
-            ActiveBlock.WriteStartBraceIndent();
+            ActiveBlock.WriteOpenBraceAndIndent();
         }
 
-        public void WriteCloseBraceIndent()
+        public void UnindentAndWriteCloseBrace()
         {
-            ActiveBlock.WriteCloseBraceIndent();
+            ActiveBlock.UnindentAndWriteCloseBrace();
         }
 
         #endregion

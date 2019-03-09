@@ -47,6 +47,7 @@ public:
     TestPacking8();
     ~TestPacking8();
 };
+#pragma pack()
 
 class DLL_API IgnoredType
 {
@@ -125,8 +126,8 @@ struct DLL_API Bar
     };
 
     Bar();
-    Bar(Foo foo);
     explicit Bar(const Foo* foo);
+    Bar(Foo foo);
     Item RetItem1() const;
     int A;
     float B;
@@ -577,6 +578,12 @@ DLL_API int Function()
 struct DLL_API TestProperties
 {
 public:
+    enum class NestedEnum
+    {
+        Value1,
+        Value2
+    };
+
     TestProperties();
     int Field;
 
@@ -599,6 +606,9 @@ public:
 
     virtual int virtualSetterReturnsBoolean();
     virtual bool setVirtualSetterReturnsBoolean(int value);
+
+    int nestedEnum();
+    int nestedEnum(int i);
 private:
     int FieldValue;
     double _refToPrimitiveInSetter;
@@ -611,7 +621,7 @@ class DLL_API HasOverridenSetter : public TestProperties
 {
 public:
     HasOverridenSetter();
-    void setVirtual(bool value);
+    void setVirtual(bool value) override;
 
     int virtualSetterReturnsBoolean() override;
     bool setVirtualSetterReturnsBoolean(int value) override;
@@ -856,6 +866,7 @@ public:
     HasStdString();
     ~HasStdString();
     std::string testStdString(const std::string& s);
+    std::string testStdStringPassedByValue(std::string s);
     std::string s;
     std::string& getStdString();
 };
@@ -899,12 +910,16 @@ class DLL_API DifferentConstOverloads
 {
 public:
     DifferentConstOverloads();
+    int getI() const;
     bool operator ==(const DifferentConstOverloads& other);
     bool operator !=(const DifferentConstOverloads& other);
     bool operator ==(int number) const;
+    bool operator ==(std::string s) const;
 private:
     int i;
 };
+
+DLL_API bool operator ==(const DifferentConstOverloads& d, const char* s);
 
 class TestNamingAnonymousTypesInUnion
 {
@@ -1307,6 +1322,10 @@ public:
     void overload(int& i);
     void overload(int&& i);
     void overload(const int& i);
+    void overload(const Foo& rx, int from = -1);
+    void overload(Foo& rx, int from = -1);
+    void overload(const Foo2& rx, int from = -1);
+    void overload(Foo2&& rx, int from = -1);
     void dispose();
 };
 
@@ -1336,7 +1355,7 @@ class DLL_API HasVirtualFunctionsWithStringParams
 public:
     HasVirtualFunctionsWithStringParams();
     ~HasVirtualFunctionsWithStringParams();
-    virtual void PureVirtualFunctionWithStringParams(std::string testString) = 0;
+    virtual void PureVirtualFunctionWithStringParams(std::string testString1, std::string testString2) = 0;
     virtual int VirtualFunctionWithStringParam(std::string testString);
 };
 
@@ -1345,7 +1364,7 @@ class DLL_API ImplementsVirtualFunctionsWithStringParams : public HasVirtualFunc
 public:
     ImplementsVirtualFunctionsWithStringParams();
     ~ImplementsVirtualFunctionsWithStringParams();
-    virtual void PureVirtualFunctionWithStringParams(std::string testString);
+    virtual void PureVirtualFunctionWithStringParams(std::string testString1, std::string testString2);
 };
 
 class DLL_API HasVirtualFunctionWithBoolParams
@@ -1384,6 +1403,21 @@ public:
     void ignored(const IgnoredType& ignoredParam);
 };
 
+class DLL_API AmbiguousParamNames
+{
+public:
+    AmbiguousParamNames(int instance, int in);
+    ~AmbiguousParamNames();
+};
+
+class DLL_API HasPropertyNamedAsParent
+{
+public:
+    HasPropertyNamedAsParent();
+    ~HasPropertyNamedAsParent();
+    int hasPropertyNamedAsParent;
+};
+
 template<typename T> void TemplatedFunction(T type)
 {
 
@@ -1393,7 +1427,7 @@ inline namespace InlineNamespace
 {
     void FunctionInsideInlineNamespace()
     {
-        
+
     }
 }
 
@@ -1427,3 +1461,50 @@ namespace hasUnnamedDecl
     {
     }
 }
+
+enum ItemsDifferByCase
+{
+    Case_a,
+    Case_A
+};
+
+template <typename T> struct MyListBase
+{
+protected:
+    ~MyListBase() {}
+};
+
+template <typename T>
+class MyList : public MyListBase<T>
+{
+public:
+    inline MyList() { }
+};
+
+template <> struct MyListBase<int>
+{
+};
+
+class MyIntList : public MyList<int>
+{
+    inline MyIntList(MyList<int> &&l) { }
+};
+
+void MyFunc(MyList<void *> *list);
+
+template<class T> using InvokeGenSeq = typename T::Type;
+
+template<int N> struct DerivedTypeAlias;
+template<int N> using TypeAlias = InvokeGenSeq<DerivedTypeAlias<N>>;
+
+template<int N>
+struct DerivedTypeAlias : TypeAlias<N / 2> {};
+
+DLL_API void integerOverload(int i);
+DLL_API void integerOverload(unsigned int i);
+DLL_API void integerOverload(long i);
+DLL_API void integerOverload(unsigned long i);
+DLL_API void takeReferenceToVoidStar(const void*& p);
+DLL_API void takeVoidStarStar(void** p);
+DLL_API void overloadPointer(void* p, int i = 0);
+DLL_API void overloadPointer(const void* p, int i = 0);

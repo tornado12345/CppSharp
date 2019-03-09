@@ -27,9 +27,9 @@ namespace CppSharp.Passes
             VisitOptions.VisitFunctionParameters = false;
         }
 
-        public override bool VisitTranslationUnit(TranslationUnit unit)
+        public override bool VisitASTContext(ASTContext context)
         {
-            bool result = base.VisitTranslationUnit(unit);
+            bool result = base.VisitASTContext(context);
             foreach (var @interface in interfaces.Where(i => !(i is ClassTemplateSpecialization)))
             {
                 int index = @interface.Namespace.Declarations.IndexOf(@interface.OriginalClass);
@@ -144,7 +144,7 @@ namespace CppSharp.Passes
                 @interface.Methods.Add(dispose);
             }
 
-            @interface.Events.AddRange(@base.Events);
+            @interface.Declarations.AddRange(@base.Events);
 
             var type = new QualifiedType(new BuiltinType(PrimitiveType.IntPtr));
             var adjustmentTo = new Property

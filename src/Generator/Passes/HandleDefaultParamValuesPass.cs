@@ -30,7 +30,7 @@ namespace CppSharp.Passes
                 return false;
             var result = base.VisitTranslationUnit(unit);
             foreach (var overload in overloads)
-                overload.Key.Functions.AddRange(overload.Value);
+                overload.Key.Declarations.AddRange(overload.Value);
             overloads.Clear();
             return result;
         }
@@ -43,6 +43,15 @@ namespace CppSharp.Passes
             var overloadIndices = new List<int>(function.Parameters.Count);
             foreach (var parameter in function.Parameters.Where(p => p.DefaultArgument != null))
             {
+                Type type = parameter.Type.Desugar(resolveTemplateSubstitution: false);
+                type = (type.GetFinalPointee() ?? type).Desugar(
+                    resolveTemplateSubstitution: false);
+                if (type is TemplateParameterSubstitutionType)
+                {
+                    parameter.DefaultArgument = null;
+                    continue;
+                }
+
                 var result = parameter.DefaultArgument.String;
                 if (PrintExpression(function, parameter.Type,
                         parameter.OriginalDefaultArgument, ref result) == null)
@@ -62,14 +71,15 @@ namespace CppSharp.Passes
             return true;
         }
 
-        private bool? PrintExpression(Function function, Type type, Expression expression, ref string result)
+        private bool? PrintExpression(Function function, Type type, ExpressionObsolete expression, ref string result)
         {
             var desugared = type.Desugar();
 
             if (!desugared.IsPrimitiveTypeConvertibleToRef() &&
-                expression.String == "0")
+                (expression.String == "0" || expression.String == "nullptr"))
             {
-                result = $"default({desugared})";
+                result = desugared.GetPointee()?.Desugar() is FunctionType ?
+                    "null" : $"default({desugared})";
                 return true;
             }
 
@@ -110,7 +120,7 @@ namespace CppSharp.Passes
             return CheckForSimpleExpressions(expression, ref result, desugared);
         }
 
-        private bool CheckForSimpleExpressions(Expression expression, ref string result, Type desugared)
+        private bool CheckForSimpleExpressions(ExpressionObsolete expression, ref string result, Type desugared)
         {
             return CheckFloatSyntax(desugared, expression, ref result) ||
                 CheckForEnumValue(desugared, expression, ref result) ||
@@ -122,29 +132,20 @@ namespace CppSharp.Passes
             if (!desugared.IsPointer())
                 return false;
 
-            // IntPtr.Zero is not a constant
-            if (desugared.IsPointerToPrimitiveType(PrimitiveType.Void))
-            {
-                result = "new global::System.IntPtr()";
-                return true;
-            }
-
             if (desugared.IsPrimitiveTypeConvertibleToRef())
                 return false;
 
             Class @class;
             if (desugared.GetFinalPointee().TryGetClass(out @class) && @class.IsValueType)
             {
-                result = string.Format("new {0}()",
-                    new CSharpTypePrinter(Context).VisitClassDecl(@class));
+                result = $"new {@class.Visit(new CSharpTypePrinter(Context))}()";
                 return true;
             }
 
-            result = "null";
-            return true;
+            return false;
         }
 
-        private bool? CheckForDefaultConstruct(Type desugared, Expression expression,
+        private bool? CheckForDefaultConstruct(Type desugared, ExpressionObsolete expression,
             ref string result)
         {
             var type = desugared.GetFinalPointee() ?? desugared;
@@ -153,7 +154,7 @@ namespace CppSharp.Passes
             if (!type.TryGetClass(out decl))
                 return false;
 
-            var ctor = expression as CXXConstructExpr;
+            var ctor = expression as CXXConstructExprObsolete;
 
             var typePrinter = new CSharpTypePrinter(Context);
             typePrinter.PushMarshalKind(MarshalKind.DefaultExpression);
@@ -161,7 +162,7 @@ namespace CppSharp.Passes
             var typePrinterResult = type.Visit(typePrinter).Type;
 
             TypeMap typeMap;
-            if (TypeMaps.FindTypeMap(decl, type, out typeMap))
+            if (TypeMaps.FindTypeMap(type, out typeMap))
             {
                 var typePrinterContext = new TypePrinterContext()
                 {
@@ -202,7 +203,7 @@ namespace CppSharp.Passes
             var method = (Method) expression.Declaration;
             var expressionSupported = decl.IsValueType && method.Parameters.Count == 0;
 
-            if (expression.String.Contains('('))
+            if (expression.String.Contains('(') || expression.String.StartsWith("{"))
             {
                 var argsBuilder = new StringBuilder("new ");
                 argsBuilder.Append(typePrinterResult);
@@ -260,15 +261,40 @@ namespace CppSharp.Passes
             if (call != null && statement.String != "0")
             {
                 var @params = regexFunctionParams.Match(statement.String).Groups[1].Value;
-                result = TranslateEnumExpression(call, desugared, @params);
+                result = TranslateEnumExpression(desugared, @params);
+                return true;
+            }
+
+            if (desugared.TryGetEnum(out Enumeration @enum) &&
+                int.TryParse(statement.String, out int value))
+            {
+                var typePrinter = new CSharpTypePrinter(Context);
+                var printedEnum = @enum.Visit(typePrinter);
+                if (value < 0)
+                    switch (@enum.BuiltinType.Type)
+                    {
+                        case PrimitiveType.UShort:
+                        case PrimitiveType.UInt:
+                        case PrimitiveType.ULong:
+                        case PrimitiveType.ULongLong:
+                        case PrimitiveType.UInt128:
+                            result = $@"({printedEnum}) unchecked(({
+                                @enum.BuiltinType.Visit(typePrinter)}) {
+                                statement.String})";
+                            break;
+                        default:
+                            result = $"({printedEnum}) ({statement.String})";
+                            break;
+                    }
+                else
+                    result = $"({printedEnum}) {statement.String}";
                 return true;
             }
 
             return false;
         }
 
-        private string TranslateEnumExpression(Function function,
-            Type desugared, string @params)
+        private string TranslateEnumExpression(Type desugared, string @params)
         {
             if (@params.Contains("::"))
                 return regexDoubleColon.Replace(@params, desugared + ".");
@@ -282,8 +308,8 @@ namespace CppSharp.Passes
                 return false;
 
             var defaultArgument = function.Parameters[0].OriginalDefaultArgument;
-            return defaultArgument is BuiltinTypeExpression &&
-                ((BuiltinTypeExpression) defaultArgument).Value == 0;
+            return defaultArgument is BuiltinTypeExpressionObsolete &&
+                ((BuiltinTypeExpressionObsolete) defaultArgument).Value == 0;
         }
 
         private bool CheckForDefaultChar(Type desugared, ref string result)

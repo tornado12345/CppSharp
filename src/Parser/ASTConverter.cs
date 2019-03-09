@@ -381,14 +381,24 @@ namespace CppSharp
         readonly TypeConverter typeConverter;
         readonly DeclConverter declConverter;
         readonly CommentConverter commentConverter;
+        readonly StmtConverter stmtConverter;
+        readonly ExprConverter exprConverter;
 
         public ASTConverter(ASTContext context)
         {
             Context = context;
             typeConverter = new TypeConverter();
             commentConverter = new CommentConverter();
-            declConverter = new DeclConverter(typeConverter, commentConverter);
+            stmtConverter = new StmtConverter();
+            declConverter = new DeclConverter(typeConverter, commentConverter, stmtConverter);
             typeConverter.declConverter = declConverter;
+
+            exprConverter = new ExprConverter();
+
+            ConversionUtils.typeConverter = typeConverter;
+            ConversionUtils.declConverter = declConverter;
+            ConversionUtils.stmtConverter = stmtConverter;
+            ConversionUtils.exprConverter = exprConverter;
         }
 
         public AST.ASTContext Convert()
@@ -552,8 +562,12 @@ namespace CppSharp
                     return AST.ExceptionSpecType.MSAny;
                 case ExceptionSpecType.BasicNoexcept:
                     return AST.ExceptionSpecType.BasicNoexcept;
-                case ExceptionSpecType.ComputedNoexcept:
-                    return AST.ExceptionSpecType.ComputedNoexcept;
+                case ExceptionSpecType.DependentNoexcept:
+                    return AST.ExceptionSpecType.DependentNoexcept;
+                case ExceptionSpecType.NoexceptFalse:
+                    return AST.ExceptionSpecType.NoexceptFalse;
+                case ExceptionSpecType.NoexceptTrue:
+                    return AST.ExceptionSpecType.NoexceptTrue;
                 case ExceptionSpecType.Unevaluated:
                     return AST.ExceptionSpecType.Unevaluated;
                 case ExceptionSpecType.Uninstantiated:
@@ -809,16 +823,18 @@ namespace CppSharp
     {
         readonly TypeConverter typeConverter;
         readonly CommentConverter commentConverter;
+        readonly StmtConverter stmtConverter;
 
         readonly Dictionary<IntPtr, AST.Declaration> Declarations;
         readonly Dictionary<IntPtr, AST.PreprocessedEntity> PreprocessedEntities;
         readonly Dictionary<IntPtr, AST.FunctionTemplateSpecialization> FunctionTemplateSpecializations;
 
-        public DeclConverter(TypeConverter type, CommentConverter comment)
+        public DeclConverter(TypeConverter type, CommentConverter comment, StmtConverter stmt)
         {
             NativeObjects = new HashSet<IDisposable>();
             typeConverter = type;
             commentConverter = comment;
+            stmtConverter = stmt;
             Declarations = new Dictionary<IntPtr, AST.Declaration>();
             PreprocessedEntities = new Dictionary<IntPtr, AST.PreprocessedEntity>();
             FunctionTemplateSpecializations = new Dictionary<IntPtr, AST.FunctionTemplateSpecialization>();
@@ -979,28 +995,28 @@ namespace CppSharp
             {
                 var decl = ctx.GetNamespaces(i);
                 var _decl = Visit(decl) as AST.Namespace;
-                _ctx.Namespaces.Add(_decl);
+                _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.EnumsCount; ++i)
             {
                 var decl = ctx.GetEnums(i);
                 var _decl = Visit(decl) as AST.Enumeration;
-                _ctx.Enums.Add(_decl);
+                _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.FunctionsCount; ++i)
             {
                 var decl = ctx.GetFunctions(i);
                 var _decl = Visit(decl) as AST.Function;
-                _ctx.Functions.Add(_decl);
+                _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.TemplatesCount; ++i)
             {
                 var decl = ctx.GetTemplates(i);
                 var _decl = Visit(decl) as AST.Template;
-                _ctx.Templates.Add(_decl);
+                _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.ClassesCount; ++i)
@@ -1008,28 +1024,28 @@ namespace CppSharp
                 var decl = ctx.GetClasses(i);
                 var _decl = Visit(decl) as AST.Class;
                 if (!_decl.IsIncomplete || _decl.IsOpaque)
-                    _ctx.Classes.Add(_decl);
+                    _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.TypedefsCount; ++i)
             {
                 var decl = ctx.GetTypedefs(i);
                 var _decl = Visit(decl) as AST.TypedefDecl;
-                _ctx.Typedefs.Add(_decl);
+                _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.TypeAliasesCount; ++i)
             {
                 var decl = ctx.GetTypeAliases(i);
                 var _decl = Visit(decl) as AST.TypeAlias;
-                _ctx.Typedefs.Add(_decl);
+                _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.VariablesCount; ++i)
             {
                 var decl = ctx.GetVariables(i);
                 var _decl = Visit(decl) as AST.Variable;
-                _ctx.Variables.Add(_decl);
+                _ctx.Declarations.Add(_decl);
             }
 
             for (uint i = 0; i < ctx.FriendsCount; ++i)
@@ -1113,26 +1129,30 @@ namespace CppSharp
             _param.HasDefaultValue = decl.HasDefaultValue;
             _param.Index = decl.Index;
             _param.DefaultArgument = VisitStatement(decl.DefaultArgument);
+            if (decl.DefaultValue != null)
+            {
+                _param.DefaultValue = stmtConverter.Visit(decl.DefaultValue);
+            }
 
             return _param;
         }
 
-        private AST.Expression VisitStatement(Statement statement)
+        private AST.ExpressionObsolete VisitStatement(StatementObsolete statement)
         {
             if (statement == null)
                 return null;
 
-            AST.Expression expression;
+            AST.ExpressionObsolete expression;
             switch (statement.Class)
             {
-                case StatementClass.BinaryOperator:
-                    var binaryOperator = BinaryOperator.__CreateInstance(statement.__Instance);
-                    expression = new AST.BinaryOperator(VisitStatement(binaryOperator.LHS),
+                case StatementClassObsolete.BinaryOperator:
+                    var binaryOperator = BinaryOperatorObsolete.__CreateInstance(statement.__Instance);
+                    expression = new AST.BinaryOperatorObsolete(VisitStatement(binaryOperator.LHS),
                         VisitStatement(binaryOperator.RHS), binaryOperator.OpcodeStr);
                     break;
-                case StatementClass.CallExprClass:
-                    var callExpression = new AST.CallExpr();
-                    var callExpr = CallExpr.__CreateInstance(statement.__Instance);
+                case StatementClassObsolete.CallExprClass:
+                    var callExpression = new AST.CallExprObsolete();
+                    var callExpr = CallExprObsolete.__CreateInstance(statement.__Instance);
                     for (uint i = 0; i < callExpr.ArgumentsCount; i++)
                     {
                         var argument = VisitStatement(callExpr.GetArguments(i));
@@ -1140,17 +1160,17 @@ namespace CppSharp
                     }
                     expression = callExpression;
                     break;
-                case StatementClass.DeclRefExprClass:
-                    expression = new AST.BuiltinTypeExpression();
+                case StatementClassObsolete.DeclRefExprClass:
+                    expression = new AST.BuiltinTypeExpressionObsolete();
                     expression.Class = AST.StatementClass.DeclarationReference;
                     break;
-                case StatementClass.CXXOperatorCallExpr:
-                    expression = new AST.BuiltinTypeExpression();
+                case StatementClassObsolete.CXXOperatorCallExpr:
+                    expression = new AST.BuiltinTypeExpressionObsolete();
                     expression.Class = AST.StatementClass.CXXOperatorCall;
                     break;
-                case StatementClass.CXXConstructExprClass:
-                    var constructorExpression = new AST.CXXConstructExpr();
-                    var constructorExpr = CXXConstructExpr.__CreateInstance(statement.__Instance);
+                case StatementClassObsolete.CXXConstructExprClass:
+                    var constructorExpression = new AST.CXXConstructExprObsolete();
+                    var constructorExpr = CXXConstructExprObsolete.__CreateInstance(statement.__Instance);
                     for (uint i = 0; i < constructorExpr.ArgumentsCount; i++)
                     {
                         var argument = VisitStatement(constructorExpr.GetArguments(i));
@@ -1159,7 +1179,7 @@ namespace CppSharp
                     expression = constructorExpression;
                     break;
                 default:
-                    expression = new AST.BuiltinTypeExpression();
+                    expression = new AST.BuiltinTypeExpressionObsolete();
                     break;
             }
             expression.Declaration = Visit(statement.Decl);
@@ -1196,6 +1216,12 @@ namespace CppSharp
                 var param = function.GetParameters(i);
                 var _param = Visit(param) as AST.Parameter;
                 _function.Parameters.Add(_param);
+            }
+
+            if (function.BodyStmt != null)
+            {
+                var _stmt = stmtConverter.Visit(function.BodyStmt);
+                _function.BodyStmt = _stmt;
             }
 
             _function.FunctionType = typeConverter.VisitQualified(function.QualifiedType);
@@ -2117,6 +2143,52 @@ namespace CppSharp
                 var argument = new AST.BlockCommandComment.Argument { Text = comment.GetArguments(i).Text };
                 blockCommandComment.Arguments.Add(argument);
             }
+        }
+    }
+
+    public static class ConversionUtils
+    {
+        public static TypeConverter typeConverter;
+        public static DeclConverter declConverter;
+        public static StmtConverter stmtConverter;
+        public static ExprConverter exprConverter;
+
+        public static AST.QualifiedType VisitQualifiedType(
+            QualifiedType qualifiedType)
+        {
+            return typeConverter.VisitQualified(qualifiedType);
+        }
+
+        public static AST.SourceRange VisitSourceRange(Parser.SourceRange loc)
+        {
+            return new AST.SourceRange();
+        }
+
+        public static AST.SourceLocation VisitSourceLocation(
+            Parser.SourceLocation loc)
+        {
+            return new AST.SourceLocation(loc.ID);
+        }
+
+        public static AST.Declaration VisitDeclaration(Parser.AST.Declaration decl)
+        {
+            return declConverter.Visit(decl);
+        }
+
+        public static AST.Stmt VisitStatement(Parser.AST.Stmt stmt)
+        {
+            return stmtConverter.Visit(stmt);
+        }
+
+        public static AST.Expr VisitExpression(Parser.AST.Expr expr)
+        {
+            return exprConverter.Visit(expr);
+        }
+
+        public static AST.TemplateArgument VisitTemplateArgument(
+            Parser.AST.TemplateArgument templateArg)
+        {
+            return new AST.TemplateArgument();
         }
     }
 

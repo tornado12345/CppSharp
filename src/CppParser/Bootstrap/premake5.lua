@@ -6,8 +6,10 @@ project "CppSharp.Parser.Bootstrap"
   language "C#"
   debugdir "."
   
-  files { "Bootstrap.cs", "*.lua" }
-  links { "CppSharp", "CppSharp.AST", "CppSharp.Generator", "System", "System.Core" }
+  files { "*.cs", "*.lua" }
+  links { "CppSharp", "CppSharp.AST", "CppSharp.Generator", "CppSharp.Parser" }
+
+  filter { "action:not netcore" }
+    links { "System", "System.Core" }
 
   SetupParser()
-  

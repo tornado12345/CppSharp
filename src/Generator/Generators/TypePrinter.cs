@@ -1,21 +1,22 @@
 ﻿using CppSharp.AST;
-using CppSharp.AST.Extensions;
-using CppSharp.Types;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace CppSharp.Generators
 {
     public class TypePrinterResult
     {
         public string Type;
-        public TypeMap TypeMap;
         public string NameSuffix;
 
         public static implicit operator TypePrinterResult(string type)
         {
             return new TypePrinterResult { Type = type };
+        }
+
+        public static implicit operator string(TypePrinterResult result)
+        {
+            return result.Type;
         }
 
         public override string ToString() => Type;
@@ -32,6 +33,9 @@ namespace CppSharp.Generators
         public TypePrinterContextKind Kind => ContextKind;
 
         public MarshalKind MarshalKind => marshalKinds.Peek();
+
+        public TypePrintScopeKind ScopeKind = TypePrintScopeKind.GlobalQualified;
+        public bool IsGlobalQualifiedScope => ScopeKind == TypePrintScopeKind.GlobalQualified;
 
         public TypePrinter()
         {
@@ -54,8 +58,6 @@ namespace CppSharp.Generators
         }
 
         public MarshalKind PopMarshalKind() => marshalKinds.Pop();
-
-        public Declaration Declaration;
         public Parameter Parameter;
 
         #region Dummy implementations
@@ -331,7 +333,7 @@ namespace CppSharp.Generators
             return VisitDeclaration(typedef);
         }
 
-        public TypePrinterResult VisitTypedefNameDecl(TypedefNameDecl typedef)
+        public virtual TypePrinterResult VisitTypedefNameDecl(TypedefNameDecl typedef)
         {
             throw new NotImplementedException();
         }

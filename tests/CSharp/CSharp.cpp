@@ -1,15 +1,29 @@
-﻿#include "CSharp.h"
+﻿#pragma once
 
-Foo::Foo(const char* name)
+#include "CSharp.h"
+
+Foo::Foo(const QString& name)
+{
+}
+
+Foo::Foo(const char* name) : publicFieldMappedToEnum(TestFlag::Flag2)
 {
     A = 10;
     P = 50;
 }
 
-Foo::Foo(int a, int p)
+Foo::Foo(int a, int p) : publicFieldMappedToEnum(TestFlag::Flag2)
 {
     A = a;
     P = p;
+}
+
+Foo::Foo(char16_t ch)
+{
+}
+
+Foo::Foo(wchar_t ch)
+{
 }
 
 int Foo::method()
@@ -58,6 +72,11 @@ void Foo::set_width(int value)
 {
 }
 
+const int& Foo::returnConstRef()
+{
+    return rename;
+}
+
 const int Foo::rename;
 
 int Foo::makeFunctionCall()
@@ -91,27 +110,44 @@ const Foo& Bar::operator[](int i) const
 }
 
 
-Quux::Quux()
+Quux::Quux() : _setterWithDefaultOverload(0)
 {
 
 }
 
-Quux::Quux(int i)
+Quux::Quux(int i) : Quux()
 {
 
 }
 
-Quux::Quux(char c)
+Quux::Quux(char c) : Quux()
 {
 
 }
 
-Quux::Quux(Foo f)
+Quux::Quux(Foo f) : Quux()
 {
 
 }
 
+Quux::~Quux()
+{
+    if (_setterWithDefaultOverload)
+    {
+        delete _setterWithDefaultOverload;
+        _setterWithDefaultOverload = 0;
+    }
+}
 
+Foo* Quux::setterWithDefaultOverload()
+{
+    return _setterWithDefaultOverload;
+}
+
+void Quux::setSetterWithDefaultOverload(Foo* value)
+{
+    _setterWithDefaultOverload = value;
+}
 
 QColor::QColor()
 {
@@ -322,9 +358,12 @@ ComplexType::ComplexType() : qFlags(QFlags<TestFlag>(TestFlag::Flag2))
 {
 }
 
-ComplexType::ComplexType(const QFlags<TestFlag> f) : qFlags(QFlags<TestFlag>(TestFlag::Flag2))
+ComplexType::ComplexType(const QFlags<TestFlag> f) : qFlags(f)
 {
-    qFlags = f;
+}
+
+ComplexType::ComplexType(const HasCtorWithMappedToEnum<TestFlag> f)
+{
 }
 
 int ComplexType::check()
@@ -430,6 +469,14 @@ int TestRenaming::property()
     return 1;
 }
 
+UsesPointerToEnum::UsesPointerToEnum()
+{
+}
+
+void UsesPointerToEnum::hasPointerToEnumInParam(Flags* flag)
+{
+}
+
 UsesPointerToEnumInParamOfVirtual::UsesPointerToEnumInParamOfVirtual()
 {
 }
@@ -459,7 +506,7 @@ UntypedFlags operator|(UntypedFlags lhs, UntypedFlags rhs)
     return static_cast<UntypedFlags>(static_cast<int>(lhs) | static_cast<int>(rhs));
 }
 
-QGenericArgument::QGenericArgument(const char *name)
+QGenericArgument::QGenericArgument(const char *name, const void* data)
 {
     _name = name;
 }
@@ -509,11 +556,19 @@ MethodsWithDefaultValues::MethodsWithDefaultValues(QRect* pointer, float f, int 
 {
 }
 
-void MethodsWithDefaultValues::defaultPointer(Foo *ptr)
+MethodsWithDefaultValues::~MethodsWithDefaultValues()
+{
+}
+
+void MethodsWithDefaultValues::defaultPointer(Foo *ptr1, Foo *ptr2)
 {
 }
 
 void MethodsWithDefaultValues::defaultVoidStar(void* ptr)
+{
+}
+
+void MethodsWithDefaultValues::defaultFunctionPointer(void(*functionPtr)(int p))
 {
 }
 
@@ -526,6 +581,10 @@ void MethodsWithDefaultValues::defaultChar(char c)
 }
 
 void MethodsWithDefaultValues::defaultEmptyChar(char c)
+{
+}
+
+void MethodsWithDefaultValues::defaultEmptyEnum(Empty e)
 {
 }
 
@@ -631,6 +690,10 @@ void MethodsWithDefaultValues::defaultIntExpressionWithEnum(int i)
 }
 
 void MethodsWithDefaultValues::defaultCtorWithMoreThanOneArg(QMargins m)
+{
+}
+
+void MethodsWithDefaultValues::defaultEmptyBraces(Foo foo)
 {
 }
 
@@ -829,36 +892,6 @@ bool CallDtorVirtually::Destroyed = false;
 HasVirtualDtor1* CallDtorVirtually::getHasVirtualDtor1(HasVirtualDtor1* returned)
 {
     return returned;
-}
-
-void SecondaryBase::VirtualMember()
-{
-}
-
-int SecondaryBase::property()
-{
-    return 0;
-}
-
-void SecondaryBase::setProperty(int value)
-{
-}
-
-void SecondaryBase::function(bool* ok)
-{
-}
-
-void SecondaryBase::protectedFunction()
-{
-}
-
-int SecondaryBase::protectedProperty()
-{
-    return 0;
-}
-
-void SecondaryBase::setProtectedProperty(int value)
-{
 }
 
 TestOverrideFromSecondaryBase::TestOverrideFromSecondaryBase()
@@ -1400,8 +1433,7 @@ int funcWithTypedefedFuncPtrAsParam(typedefedFuncPtr* func)
 
 typedefedFuncPtr* TestDuplicateDelegate::testDuplicateDelegate(int a)
 {
-    typedefedFuncPtr* func;
-    return func;
+    return 0;
 }
 
 void InlineNamespace::FunctionInsideInlineNamespace()
@@ -1473,4 +1505,49 @@ HasFixedArrayOfPointers::HasFixedArrayOfPointers()
 
 HasFixedArrayOfPointers::~HasFixedArrayOfPointers()
 {
+}
+
+SimpleInterface::SimpleInterface()
+{
+}
+
+SimpleInterface::~SimpleInterface()
+{
+}
+
+InterfaceTester::InterfaceTester() : interface(0)
+{
+}
+
+InterfaceTester::~InterfaceTester()
+{
+}
+
+int InterfaceTester::capacity()
+{
+    return interface->capacity();
+}
+
+int InterfaceTester::size()
+{
+    return interface->size();
+}
+
+void* InterfaceTester::get(int n)
+{
+    return interface->get(n);
+}
+
+void InterfaceTester::setInterface(SimpleInterface* i)
+{
+    interface = i;
+}
+
+void va_listFunction(va_list v)
+{
+}
+
+char* returnCharPointer()
+{
+    return 0;
 }

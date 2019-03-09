@@ -21,6 +21,7 @@ namespace CppSharp.Generator.Tests
 
             var testsPath = GeneratorTest.GetTestsDirectory("Native");
             ParserOptions.AddIncludeDirs(testsPath);
+            ParserOptions.SkipPrivateDeclarations = true;
 
             var module = Options.AddModule("Test");
             module.Headers.AddRange(files);
@@ -34,6 +35,7 @@ namespace CppSharp.Generator.Tests
             if (!Driver.ParseCode())
                 throw new Exception("Error parsing the code");
 
+            Driver.SetupTypeMaps();
             AstContext = Driver.Context.ASTContext;
             new CleanUnitPass { Context = Driver.Context }.VisitASTContext(AstContext);
             new ResolveIncompleteDeclsPass { Context = Driver.Context }.VisitASTContext(AstContext);

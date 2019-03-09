@@ -37,8 +37,11 @@ namespace CppSharp.Passes
 
                 foreach (Method getter in
                     from getter in getters
-                    where getter.IsGenerated && getter.SynthKind != FunctionSynthKind.ComplementOperator &&
-                          ((Class) getter.Namespace).Methods.All(m => m == getter ||!m.IsGenerated || m.Name != getter.Name)
+                    where getter.IsGenerated &&
+                          getter.SynthKind != FunctionSynthKind.ComplementOperator &&
+                          ((Class) getter.Namespace).Methods.All(
+                              m => m == getter || !m.IsGenerated || m.Name != getter.Name ||
+                                   m.Parameters.Count(p => p.Kind == ParameterKind.Regular) == 0)
                     select getter)
                 {
                     // Make it a read-only property
@@ -121,7 +124,8 @@ namespace CppSharp.Passes
             private static string GetReadWritePropertyName(INamedDecl getter, string afterSet)
             {
                 string name = GetPropertyName(getter.Name);
-                if (name != afterSet && name.StartsWith("is", StringComparison.Ordinal))
+                if (name != afterSet && name.StartsWith("is", StringComparison.Ordinal) &&
+                    name != "is")
                 {
                     name = char.ToLowerInvariant(name[2]) + name.Substring(3);
                 }

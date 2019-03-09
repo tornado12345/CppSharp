@@ -109,11 +109,6 @@ namespace CppSharp.Tests
             return GetEnumType(ctx.Type);
         }
 
-        public override string CSharpSignature(TypePrinterContext ctx)
-        {
-            return CSharpSignatureType(ctx).ToString();
-        }
-
         public override void CSharpMarshalToNative(CSharpMarshalContext ctx)
         {
             if (ctx.Parameter.Type.Desugar().IsAddress())
@@ -142,10 +137,7 @@ namespace CppSharp.Tests
             ClassTemplateSpecialization classTemplateSpecialization;
             var templateSpecializationType = type as TemplateSpecializationType;
             if (templateSpecializationType != null)
-            {
-                classTemplateSpecialization = templateSpecializationType.GetClassTemplateSpecialization();
-                return classTemplateSpecialization.Arguments[0].Type.Type;
-            }
+                return templateSpecializationType.Arguments[0].Type.Type;
             var declaration = ((TagType) type).Declaration;
             if (declaration.IsDependent)
                 return new TagType(((Class) declaration).TemplateParameters[0]);
@@ -164,12 +156,7 @@ namespace CppSharp.Tests
 
         public override Type CSharpSignatureType(TypePrinterContext ctx)
         {
-            return new TagType(new Enumeration());
-        }
-
-        public override string CSharpSignature(TypePrinterContext ctx)
-        {
-            return "Flags";
+            return new TagType(flags ?? (flags = Context.ASTContext.FindEnum("Flags").First()));
         }
 
         public override void CSharpMarshalToNative(CSharpMarshalContext ctx)
@@ -181,6 +168,8 @@ namespace CppSharp.Tests
         {
             ctx.Return.Write(ctx.ReturnVarName);
         }
+
+        private Enumeration flags;
     }
 
     [TypeMap("QList")]
@@ -190,7 +179,7 @@ namespace CppSharp.Tests
         {
             get
             {
-                var type = (TemplateSpecializationType)Type;
+                var type = (TemplateSpecializationType) Type;
                 var pointeeType = type.Arguments[0].Type;
                 var checker = new TypeIgnoreChecker(TypeMapDatabase);
                 pointeeType.Visit(checker);
@@ -198,7 +187,7 @@ namespace CppSharp.Tests
             }
         }
 
-        public override string CSharpSignature(TypePrinterContext ctx)
+        public override Type CSharpSignatureType(TypePrinterContext ctx)
         {
             if (ctx.Kind == TypePrinterContextKind.Native)
             {
@@ -206,13 +195,16 @@ namespace CppSharp.Tests
                 var specialization = type.GetClassTemplateSpecialization();
                 var typePrinter = new CSharpTypePrinter(null);
                 typePrinter.PushContext(TypePrinterContextKind.Native);
-                return string.Format($"{specialization.Visit(typePrinter)}{(Type.IsAddress() ? "*" : string.Empty)}", specialization.Visit(typePrinter),
-                    Type.IsAddress() ? "*" : string.Empty);
+                return new CustomType(string.Format($@"{
+                    specialization.Visit(typePrinter)}{
+                    (Type.IsAddress() ? "*" : string.Empty)}", specialization.Visit(typePrinter),
+                    Type.IsAddress() ? "*" : string.Empty));
             }
 
-            return string.Format("System.Collections.Generic.{0}<{1}>",
-                ctx.MarshalKind == MarshalKind.DefaultExpression ? "List" : "IList",
-                ctx.GetTemplateParameterList());
+            return new CustomType(
+                $@"System.Collections.Generic.{
+                    (ctx.MarshalKind == MarshalKind.DefaultExpression ? "List" : "IList")}<{
+                    ctx.GetTemplateParameterList()}>");
         }
 
         public override void CSharpMarshalToNative(CSharpMarshalContext ctx)
@@ -234,10 +226,10 @@ namespace CppSharp.Tests
     [TypeMap("TypeMappedWithOperator")]
     public class TypeMappedWithOperator : TypeMap
     {
-        public override string CSharpSignature(TypePrinterContext ctx)
+        public override Type CSharpSignatureType(TypePrinterContext ctx)
         {
             // doesn't matter, we just need it to compile
-            return "int";
+            return new BuiltinType(PrimitiveType.Int);
         }
 
         public override void CSharpMarshalToNative(CSharpMarshalContext ctx)
@@ -248,6 +240,25 @@ namespace CppSharp.Tests
         public override void CSharpMarshalToManaged(CSharpMarshalContext ctx)
         {
             ctx.Return.Write(ctx.ReturnVarName);
+        }
+    }
+
+    [TypeMap("QString")]
+    public class QString : TypeMap
+    {
+        public override Type CSharpSignatureType(TypePrinterContext ctx)
+        {
+            return new CILType(typeof(string));
+        }
+
+        public override void CSharpMarshalToNative(CSharpMarshalContext ctx)
+        {
+            ctx.Return.Write("\"test\"");
+        }
+
+        public override void CSharpMarshalToManaged(CSharpMarshalContext ctx)
+        {
+            ctx.Return.Write("\"test\"");
         }
     }
 

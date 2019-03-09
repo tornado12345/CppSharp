@@ -48,6 +48,11 @@ namespace CppSharp.Generators
 
         public AstVisitorOptions VisitOptions { get; } = new AstVisitorOptions();
 
+        protected CodeGenerator(BindingContext context)
+        {
+            Context = context;
+        }
+
         protected CodeGenerator(BindingContext context, TranslationUnit unit)
             : this(context, new List<TranslationUnit> { unit })
         {
@@ -155,7 +160,12 @@ namespace CppSharp.Generators
                 lines.Add("<summary>");
                 foreach (string line in HtmlEncoder.HtmlEncode(comment.BriefText).Split(
                                             Environment.NewLine.ToCharArray()))
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+
                     lines.Add($"<para>{line}</para>");
+                }
                 lines.Add("</summary>");
             }
             else
@@ -193,7 +203,11 @@ namespace CppSharp.Generators
         {
             for (int i = 0; i < @enum.Items.Count; i++)
             {
-                @enum.Items[i].Visit(this);
+                var item = @enum.Items[i];
+                if (!item.IsGenerated)
+                    continue;
+
+                item.Visit(this);
                 WriteLine(i == @enum.Items.Count - 1 ? string.Empty : ",");
             }
         }
@@ -345,7 +359,7 @@ namespace CppSharp.Generators
 
         public virtual bool VisitFriend(Friend friend)
         {
-            throw new NotImplementedException();
+            return true;
         }
 
         public virtual bool VisitClassTemplateDecl(ClassTemplate template)
@@ -523,6 +537,7 @@ namespace CppSharp.Generators
         public static readonly string DummyIdentifier = Generator.GeneratedIdentifier("dummy");
         public static readonly string TargetIdentifier = Generator.GeneratedIdentifier("target");
         public static readonly string SlotIdentifier = Generator.GeneratedIdentifier("slot");
+        public static readonly string PtrIdentifier = Generator.GeneratedIdentifier("ptr");
 
         public static readonly string OwnsNativeInstanceIdentifier = Generator.GeneratedIdentifier("ownsNativeInstance");
 

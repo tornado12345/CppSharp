@@ -6,6 +6,7 @@
 // ----------------------------------------------------------------------------
 #include "CppParser.h"
 #include "AST.h"
+#include "Decl.h"
 #include "Target.h"
 
 using namespace System;
@@ -488,6 +489,36 @@ bool CppSharp::Parser::CppParserOptions::UnityBuild::get()
 void CppSharp::Parser::CppParserOptions::UnityBuild::set(bool value)
 {
     ((::CppSharp::CppParser::CppParserOptions*)NativePtr)->unityBuild = value;
+}
+
+bool CppSharp::Parser::CppParserOptions::SkipPrivateDeclarations::get()
+{
+    return ((::CppSharp::CppParser::CppParserOptions*)NativePtr)->skipPrivateDeclarations;
+}
+
+void CppSharp::Parser::CppParserOptions::SkipPrivateDeclarations::set(bool value)
+{
+    ((::CppSharp::CppParser::CppParserOptions*)NativePtr)->skipPrivateDeclarations = value;
+}
+
+bool CppSharp::Parser::CppParserOptions::SkipLayoutInfo::get()
+{
+    return ((::CppSharp::CppParser::CppParserOptions*)NativePtr)->skipLayoutInfo;
+}
+
+void CppSharp::Parser::CppParserOptions::SkipLayoutInfo::set(bool value)
+{
+    ((::CppSharp::CppParser::CppParserOptions*)NativePtr)->skipLayoutInfo = value;
+}
+
+bool CppSharp::Parser::CppParserOptions::SkipFunctionBodies::get()
+{
+    return ((::CppSharp::CppParser::CppParserOptions*)NativePtr)->skipFunctionBodies;
+}
+
+void CppSharp::Parser::CppParserOptions::SkipFunctionBodies::set(bool value)
+{
+    ((::CppSharp::CppParser::CppParserOptions*)NativePtr)->skipFunctionBodies = value;
 }
 
 unsigned int CppSharp::Parser::CppParserOptions::ArgumentsCount::get()

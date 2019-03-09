@@ -10,6 +10,7 @@ local LLVMRootDirRelease = ""
 require "scripts/LLVM"
 
 function SearchLLVM()
+  local basedir = path.getdirectory(_PREMAKE_COMMAND)
   LLVMRootDirDebug = basedir .. "/scripts/" .. get_llvm_package_name(nil, "Debug")
   LLVMRootDirRelease = basedir .. "/scripts/" .. get_llvm_package_name()
 
@@ -89,7 +90,7 @@ function CopyClangIncludes()
   end
 
   if os.isdir(clangBuiltinIncludeDir) then
-    postbuildcommands { string.format("{COPY} %s %%{cfg.buildtarget.directory}", clangBuiltinIncludeDir) }
+    postbuildcommands { string.format('{COPY} "%s" "%%{cfg.buildtarget.directory}"', clangBuiltinIncludeDir) }
   end
 end
 

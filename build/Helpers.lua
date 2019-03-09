@@ -6,12 +6,13 @@ newoption {
    allowed = {
       { "x86",  "x86 32-bits" },
       { "x64",  "x64 64-bits" },
+      { "AnyCPU",  "Any CPU (.NET)" },
    }
 }
 
 newoption {
    trigger     = "no-cxx11-abi",
-   description = "disable cxx11 abi on gcc 4.9+"
+   description = "disable C++-11 ABI on GCC 4.9+"
 }
 
 explicit_target_architecture = _OPTIONS["arch"]
@@ -23,6 +24,10 @@ function is_64_bits_mono_runtime()
 end
 
 function target_architecture()
+  if _ACTION == "netcore" then
+    return "AnyCPU"
+  end
+
   -- Default to 32-bit on Windows and Mono architecture otherwise.
   if explicit_target_architecture ~= nil then
     return explicit_target_architecture
@@ -35,9 +40,19 @@ if not _OPTIONS["arch"] then
   _OPTIONS["arch"] = target_architecture()
 end
 
-action = _ACTION or ""
+-- Uncomment to enable Roslyn compiler.
+--[[
+premake.override(premake.tools.dotnet, "gettoolname", function(base, cfg, tool)
+  if tool == "csc" then
+    return "csc"
+  end
+  return base(cfg, tool)
+end)
+]]
 
 basedir = path.getdirectory(_PREMAKE_COMMAND)
+premake.path = premake.path .. ";" .. path.join(basedir, "modules")
+
 depsdir = path.getabsolute("../deps");
 srcdir = path.getabsolute("../src");
 incdir = path.getabsolute("../include");
@@ -45,13 +60,19 @@ bindir = path.getabsolute("../bin");
 examplesdir = path.getabsolute("../examples");
 testsdir = path.getabsolute("../tests");
 
-builddir = path.getabsolute("./" .. action);
+builddir = path.getabsolute("./" .. _ACTION);
 if _ARGS[1] then
     builddir = path.getabsolute("./" .. _ARGS[1]);
 end
 
-objsdir = path.join(builddir, "obj", "%{cfg.buildcfg}_%{cfg.platform}");
-libdir = path.join(builddir, "lib", "%{cfg.buildcfg}_%{cfg.platform}");
+if _ACTION ~= "netcore" then
+  objsdir = path.join(builddir, "obj", "%{cfg.buildcfg}_%{cfg.platform}");
+  libdir = path.join(builddir, "lib", "%{cfg.buildcfg}_%{cfg.platform}");
+else
+  objsdir = path.join(builddir, "obj", "%{cfg.buildcfg}");
+  libdir = path.join(builddir, "lib", "%{cfg.buildcfg}");
+end
+
 gendir = path.join(builddir, "gen");
 
 msvc_buildflags = { "/wd4267" }
@@ -61,6 +82,7 @@ msvc_cpp_defines = { }
 generate_build_config = true
 
 function string.starts(str, start)
+   if str == nil then return end
    return string.sub(str, 1, string.len(start)) == start
 end
 
@@ -88,25 +110,27 @@ function SetupNativeProject()
     buildoptions { gcc_buildflags }
     links { "stdc++" }
 
+  filter { "toolset:clang", "system:not macosx" }
+    linkoptions { "-fuse-ld=/usr/bin/ld.lld" }
+
   filter { "system:macosx", "language:C++" }
     buildoptions { gcc_buildflags, "-stdlib=libc++" }
     links { "c++" }
 
   filter { "system:not windows", "language:C++" }
-    buildoptions { "-fpermissive -std=c++11" }
+    cppdialect "C++11"
+    buildoptions { "-fpermissive" }
   
   -- OS-specific options
   
   filter { "system:windows" }
     defines { "WIN32", "_WINDOWS" }
   
-  filter {}
+  -- For context: https://github.com/premake/premake-core/issues/935
+  filter {"system:windows", "action:vs*"}
+    systemversion("latest")
 
-  if os.istarget("linux") then
-    if not UseCxx11ABI() then
-      defines { "_GLIBCXX_USE_CXX11_ABI=0" }
-    end
-  end
+  filter {}
 end
 
 function SetupManagedProject()
@@ -117,10 +141,13 @@ function SetupManagedProject()
   dotnetframework "4.6"
 
   if not os.istarget("macosx") then
-    filter { "action:vs*" }
+    filter { "action:vs* or netcore" }
       location "."
     filter {}
   end
+
+  filter { "action:netcore" }
+    dotnetframework "netstandard2.0"
 
   filter { "action:vs2013" }
     dotnetframework "4.5"
@@ -177,6 +204,11 @@ function StaticLinksOpt(libnames)
   links(existing_libnames)
 end
 
+function UseClang()
+  local compiler = os.getenv("CXX") or ""
+  return string.match(compiler, "clang")
+end
+
 function GccVersion()
   local compiler = os.getenv("CXX")
   if compiler == nil then
@@ -184,6 +216,9 @@ function GccVersion()
   end
   local out = os.outputof(compiler.." -v")
   local version = string.match(out, "gcc version [0-9\\.]+")
+  if version == nil then
+    version = string.match(out, "clang version [0-9\\.]+")
+  end
   return string.sub(version, 13)
 end
 
@@ -192,4 +227,16 @@ function UseCxx11ABI()
     return true
   end
   return false
+end
+
+function EnableNativeProjects()
+  if _ACTION == "netcore" then
+    return false
+  end
+
+  if string.starts(_ACTION, "vs") and not os.ishost("windows") then
+    return false
+  end
+
+  return true
 end

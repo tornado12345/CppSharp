@@ -1,7 +1,6 @@
 using System;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -13,6 +12,7 @@ using CppSharp.Parser;
 using CppSharp.Passes;
 using CppSharp.Utils;
 using Microsoft.CSharp;
+using CppSharp.Types;
 
 namespace CppSharp
 {
@@ -68,9 +68,11 @@ namespace CppSharp
             ValidateOptions();
             ParserOptions.Setup();
             Context = new BindingContext(Options, ParserOptions);
-            Context.TypeMaps.SetupTypeMaps(Options.GeneratorKind);
             Generator = CreateGeneratorFromKind(Options.GeneratorKind);
         }
+
+        public void SetupTypeMaps() =>
+            Context.TypeMaps = new TypeMapDatabase(Context);
 
         void OnSourceFileParsed(IEnumerable<string> files, ParserResult result)
         {
@@ -94,7 +96,9 @@ namespace CppSharp
                     hasParsingErrors = true;
                     break;
                 case ParserResultKind.FileNotFound:
-                    Diagnostics.Error("A file from '{0}' was not found", string.Join(",", files));
+                    Diagnostics.Error("File{0} not found: '{1}'",
+                        (files.Count() > 1) ? "s" : "",  string.Join(",", files));
+                    hasParsingErrors = true;
                     break;
             }
 
@@ -212,8 +216,7 @@ namespace CppSharp
         public void SetupPasses(ILibrary library)
         {
             var TranslationUnitPasses = Context.TranslationUnitPasses;
-
-            TranslationUnitPasses.AddPass(new SortDeclarationsPass());
+            
             TranslationUnitPasses.AddPass(new ResolveIncompleteDeclsPass());
             TranslationUnitPasses.AddPass(new IgnoreSystemDeclarationsPass());
             if (Options.IsCSharpGenerator)
@@ -234,9 +237,9 @@ namespace CppSharp
             TranslationUnitPasses.AddPass(new CheckStaticClass());
             TranslationUnitPasses.AddPass(new MoveOperatorToClassPass());
             TranslationUnitPasses.AddPass(new MoveFunctionToClassPass());
+            TranslationUnitPasses.AddPass(new CheckAmbiguousFunctions());
             TranslationUnitPasses.AddPass(new ConstructorToConversionOperatorPass());
             TranslationUnitPasses.AddPass(new MarshalPrimitivePointersAsRefTypePass());
-            TranslationUnitPasses.AddPass(new CheckAmbiguousFunctions());
             TranslationUnitPasses.AddPass(new CheckOperatorsOverloadsPass());
             TranslationUnitPasses.AddPass(new CheckVirtualOverrideReturnCovariance());
             TranslationUnitPasses.AddPass(new CleanCommentsPass());
@@ -247,16 +250,15 @@ namespace CppSharp
             TranslationUnitPasses.AddPass(new CleanInvalidDeclNamesPass());
             TranslationUnitPasses.AddPass(new CheckIgnoredDeclsPass());
             TranslationUnitPasses.AddPass(new CheckFlagEnumsPass());
-            TranslationUnitPasses.AddPass(new CheckDuplicatedNamesPass());
 
             if (Options.IsCSharpGenerator)
             {
-                TranslationUnitPasses.AddPass(new GenerateAbstractImplementationsPass());
                 if (Options.GenerateDefaultValuesForArguments)
                 {
                     TranslationUnitPasses.AddPass(new FixDefaultParamValuesOfOverridesPass());
                     TranslationUnitPasses.AddPass(new HandleDefaultParamValuesPass());
                 }
+                TranslationUnitPasses.AddPass(new GenerateAbstractImplementationsPass());
                 TranslationUnitPasses.AddPass(new MultipleInheritancePass());
             }
             TranslationUnitPasses.AddPass(new DelegatesPass());
@@ -269,6 +271,7 @@ namespace CppSharp
                 TranslationUnitPasses.AddPass(new SpecializationMethodsWithDependentPointersPass());
                 TranslationUnitPasses.AddPass(new ParamTypeToInterfacePass());
             }
+            TranslationUnitPasses.AddPass(new CheckDuplicatedNamesPass());
 
             TranslationUnitPasses.AddPass(new MarkUsedClassInternalsPass());
 
@@ -435,6 +438,7 @@ namespace CppSharp
                 Diagnostics.Message("Processing code...");
 
             driver.SetupPasses(library);
+            driver.SetupTypeMaps();
 
             library.Preprocess(driver, driver.Context.ASTContext);
 
@@ -444,18 +448,18 @@ namespace CppSharp
             if (!options.Quiet)
                 Diagnostics.Message("Generating code...");
 
-            var outputs = driver.GenerateCode();
-
-            foreach (var output in outputs)
+            if (!options.DryRun)
             {
-                foreach (var pass in driver.Context.GeneratorOutputPasses.Passes)
+                var outputs = driver.GenerateCode();
+
+                foreach (var output in outputs)
                 {
-                    pass.VisitGeneratorOutput(output);
+                    foreach (var pass in driver.Context.GeneratorOutputPasses.Passes)
+                    {
+                        pass.VisitGeneratorOutput(output);
+                    }
                 }
-            }
 
-            if (!driver.Options.DryRun)
-            {
                 driver.SaveCode(outputs);
                 if (driver.Options.IsCSharpGenerator && driver.Options.CompileCode)
                     foreach (var module in driver.Options.Modules)

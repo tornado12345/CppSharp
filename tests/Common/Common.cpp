@@ -108,11 +108,11 @@ Bar::Bar()
 {
 }
 
-Bar::Bar(Foo foo)
+Bar::Bar(const Foo* foo)
 {
 }
 
-Bar::Bar(const Foo* foo)
+Bar::Bar(Foo foo)
 {
 }
 
@@ -504,6 +504,11 @@ std::string HasStdString::testStdString(const std::string& s)
     return s + "_test";
 }
 
+std::string HasStdString::testStdStringPassedByValue(std::string s)
+{
+    return s + "_test";
+}
+
 std::string& HasStdString::getStdString()
 {
     return s;
@@ -581,6 +586,16 @@ bool TestProperties::setVirtualSetterReturnsBoolean(int value)
     return changed;
 }
 
+int TestProperties::nestedEnum()
+{
+    return 5;
+}
+
+int TestProperties::nestedEnum(int i)
+{
+    return i;
+}
+
 HasOverridenSetter::HasOverridenSetter()
 {
 }
@@ -647,6 +662,11 @@ DifferentConstOverloads::DifferentConstOverloads() : i(5)
 {
 }
 
+int DifferentConstOverloads::getI() const
+{
+    return i;
+}
+
 bool DifferentConstOverloads::operator ==(const DifferentConstOverloads& other)
 {
     return i == other.i;
@@ -659,7 +679,17 @@ bool DifferentConstOverloads::operator !=(const DifferentConstOverloads& other)
 
 bool DifferentConstOverloads::operator ==(int number) const
 {
-    return false;
+    return i == number;
+}
+
+bool DifferentConstOverloads::operator ==(std::string s) const
+{
+    return i == s.length();
+}
+
+bool operator ==(const DifferentConstOverloads& d, const char* s)
+{
+    return d.getI() == strlen(s);
 }
 
 int HasVirtualProperty::getProperty()
@@ -840,6 +870,22 @@ void HasOverloadsWithDifferentPointerKindsToSameType::overload(const int& i)
 {
 }
 
+void HasOverloadsWithDifferentPointerKindsToSameType::overload(const Foo& rx, int from)
+{
+}
+
+void HasOverloadsWithDifferentPointerKindsToSameType::overload(Foo& rx, int from)
+{
+}
+
+void HasOverloadsWithDifferentPointerKindsToSameType::overload(const Foo2& rx, int from)
+{
+}
+
+void HasOverloadsWithDifferentPointerKindsToSameType::overload(Foo2&& rx, int from)
+{
+}
+
 void HasOverloadsWithDifferentPointerKindsToSameType::dispose()
 {
 }
@@ -901,7 +947,7 @@ ImplementsVirtualFunctionsWithStringParams::~ImplementsVirtualFunctionsWithStrin
 {
 }
 
-void ImplementsVirtualFunctionsWithStringParams::PureVirtualFunctionWithStringParams(std::string testString)
+void ImplementsVirtualFunctionsWithStringParams::PureVirtualFunctionWithStringParams(std::string testString1, std::string testString2)
 {
 }
 
@@ -952,5 +998,53 @@ void DerivedFromSecondaryBaseWithIgnoredVirtualMethod::generated()
 }
 
 void DerivedFromSecondaryBaseWithIgnoredVirtualMethod::ignored(const IgnoredType& ignoredParam)
+{
+}
+
+AmbiguousParamNames::AmbiguousParamNames(int instance, int in)
+{
+}
+
+AmbiguousParamNames::~AmbiguousParamNames()
+{
+}
+
+HasPropertyNamedAsParent::HasPropertyNamedAsParent()
+{
+}
+
+HasPropertyNamedAsParent::~HasPropertyNamedAsParent()
+{
+}
+
+void integerOverload(int i)
+{
+}
+
+void integerOverload(unsigned int i)
+{
+}
+
+void integerOverload(long i)
+{
+}
+
+void integerOverload(unsigned long i)
+{
+}
+
+void takeReferenceToVoidStar(const void*& p)
+{
+}
+
+void takeVoidStarStar(void** p)
+{
+}
+
+void overloadPointer(void* p, int i)
+{
+}
+
+void overloadPointer(const void* p, int i)
 {
 }

@@ -11,48 +11,24 @@ namespace CppSharp.AST
     {
         public bool IsAnonymous { get; set; }
 
-        public List<Declaration> Declarations;
+        public DeclarationsList Declarations;
         public List<TypeReference> TypeReferences;
 
-        public DeclIterator<Namespace> Namespaces
-        {
-            get { return new DeclIterator<Namespace>(Declarations); }
-        }
+        public IEnumerable<Namespace> Namespaces => Declarations.Namespaces;
 
-        public DeclIterator<Enumeration> Enums
-        {
-            get { return new DeclIterator<Enumeration>(Declarations); }
-        }
+        public IEnumerable<Enumeration> Enums => Declarations.Enums;
 
-        public DeclIterator<Function> Functions
-        {
-            get { return new DeclIterator<Function>(Declarations); }
-        }
+        public IEnumerable<Function> Functions => Declarations.Functions;
 
-        public DeclIterator<Class> Classes
-        {
-            get { return new DeclIterator<Class>(Declarations); }
-        }
+        public IEnumerable<Class> Classes => Declarations.Classes;
 
-        public DeclIterator<Template> Templates
-        {
-            get { return new DeclIterator<Template>(Declarations); }
-        }
+        public IEnumerable<Template> Templates => Declarations.Templates;
 
-        public DeclIterator<TypedefNameDecl> Typedefs
-        {
-            get { return new DeclIterator<TypedefNameDecl>(Declarations); }
-        }
+        public IEnumerable<TypedefNameDecl> Typedefs => Declarations.Typedefs;
 
-        public DeclIterator<Variable> Variables
-        {
-            get { return new DeclIterator<Variable>(Declarations); }
-        }
+        public IEnumerable<Variable> Variables => Declarations.Variables;
 
-        public DeclIterator<Event> Events
-        {
-            get { return new DeclIterator<Event>(Declarations); }
-        }
+        public IEnumerable<Event> Events => Declarations.Events;
 
         // Used to keep track of anonymous declarations.
         public Dictionary<ulong, Declaration> Anonymous; 
@@ -72,7 +48,7 @@ namespace CppSharp.AST
 
         protected DeclarationContext()
         {
-            Declarations = new List<Declaration>();
+            Declarations = new DeclarationsList();
             TypeReferences = new List<TypeReference>();
             Anonymous = new Dictionary<ulong, Declaration>();
         }
@@ -107,25 +83,6 @@ namespace CppSharp.AST
             return Anonymous.ContainsKey(key) ? Anonymous[key] : null;
         }
 
-        public DeclarationContext FindDeclaration(IEnumerable<string> declarations)
-        {
-            DeclarationContext currentDeclaration = this;
-
-            foreach (var declaration in declarations)
-            {
-                var subDeclaration = currentDeclaration.Namespaces
-                    .Concat<DeclarationContext>(currentDeclaration.Classes)
-                    .FirstOrDefault(e => e.Name.Equals(declaration));
-
-                if (subDeclaration == null)
-                    return null;
-
-                currentDeclaration = subDeclaration;
-            }
-
-            return currentDeclaration as DeclarationContext;
-        }
-
         public Namespace FindNamespace(string name)
         {
             var namespaces = name.Split(new string[] { "::" },
@@ -140,7 +97,7 @@ namespace CppSharp.AST
 
             foreach (var @namespace in namespaces)
             {
-                var childNamespace = currentNamespace.Namespaces.Find(
+                var childNamespace = currentNamespace.Namespaces.FirstOrDefault(
                     e => e.Name.Equals(@namespace));
 
                 if (childNamespace == null)
@@ -164,7 +121,7 @@ namespace CppSharp.AST
                         Namespace = this,
                     };
 
-                Namespaces.Add(@namespace);
+                Declarations.Add(@namespace);
             }
 
             return @namespace;
@@ -177,12 +134,12 @@ namespace CppSharp.AST
 
             if (entries.Count <= 1)
             {
-                var @enum = Enums.Find(e => e.Name.Equals(name));
+                var @enum = Enums.FirstOrDefault(e => e.Name.Equals(name));
 
                 if (@enum == null && createDecl)
                 {
                     @enum = new Enumeration() { Name = name, Namespace = this };
-                    Enums.Add(@enum);
+                    Declarations.Add(@enum);
                 }
 
                 return @enum;
@@ -213,12 +170,12 @@ namespace CppSharp.AST
 
             if (entries.Count <= 1)
             {
-                var function = Functions.Find(e => e.Name.Equals(name));
+                var function = Functions.FirstOrDefault(e => e.Name.Equals(name));
 
                 if (function == null && createDecl)
                 {
                     function = new Function() { Name = name, Namespace = this };
-                    Functions.Add(function);
+                    Declarations.Add(function);
                 }
             
                 return function;
@@ -259,31 +216,12 @@ namespace CppSharp.AST
         {
             if (string.IsNullOrEmpty(name)) return null;
 
-            var entries = name.Split(new[] { "::" },
-                StringSplitOptions.RemoveEmptyEntries).ToList();
-
-            if (entries.Count <= 1)
-            {
-                var @class = Classes.Find(c => c.Name.Equals(name, stringComparison)) ??
-                             Namespaces.Select(n => n.FindClass(name, stringComparison)).FirstOrDefault(c => c != null);
-                if (@class != null)
-                    return @class.CompleteDeclaration == null ?
-                        @class : (Class) @class.CompleteDeclaration;
-                return null;
-            }
-
-            var className = entries[entries.Count - 1];
-            var namespaces = entries.Take(entries.Count - 1);
-
-            DeclarationContext declContext = FindDeclaration(namespaces);
-            if (declContext == null)
-            {
-                declContext = FindClass(entries[0]);
-                if (declContext == null)
-                    return null;
-            }
-
-            return declContext.FindClass(className);
+            var @class = Classes.FirstOrDefault(c => c.Name.Equals(name, stringComparison)) ??
+                Namespaces.Select(n => n.FindClass(name, stringComparison)).FirstOrDefault(c => c != null);
+            if (@class != null)
+                return @class.CompleteDeclaration == null ?
+                    @class : (Class) @class.CompleteDeclaration;
+            return null;
         }
 
         public Class FindClass(string name, bool isComplete,
@@ -296,7 +234,7 @@ namespace CppSharp.AST
                 if (createDecl)
                 {
                     @class = CreateClass(name, isComplete);
-                    Classes.Add(@class);
+                    Declarations.Add(@class);
                 }
 
                 return @class;
@@ -314,7 +252,7 @@ namespace CppSharp.AST
             if (@class.IsIncomplete)
             {
                 @class.CompleteDeclaration = newClass;
-                Classes.Replace(@class, newClass);
+                Declarations[Declarations.IndexOf(@class)] = newClass;
             }
 
             return newClass;
@@ -354,12 +292,12 @@ namespace CppSharp.AST
 
             if (entries.Count <= 1)
             {
-                var typeDef = Typedefs.Find(e => e.Name.Equals(name));
+                var typeDef = Typedefs.FirstOrDefault(e => e.Name.Equals(name));
 
                 if (typeDef == null && createDecl)
                 {
                     typeDef = new TypedefDecl { Name = name, Namespace = this };
-                    Typedefs.Add(typeDef);
+                    Declarations.Add(typeDef);
                 }
 
                 return typeDef;
@@ -387,7 +325,7 @@ namespace CppSharp.AST
 
         public Enumeration FindEnumWithItem(string name)
         {
-            return Enums.Find(e => e.ItemsByName.ContainsKey(name)) ??
+            return Enums.FirstOrDefault(e => e.ItemsByName.ContainsKey(name)) ??
                 (from declContext in Namespaces.Union<DeclarationContext>(Classes)
                  let @enum = declContext.FindEnumWithItem(name)
                  where @enum != null
@@ -412,8 +350,8 @@ namespace CppSharp.AST
             get
             {
                 Func<Declaration, bool> pred = (t => t.IsGenerated);
-                return Enums.Exists(pred) || HasFunctions || Typedefs.Exists(pred)
-                    || Classes.Any() || Namespaces.Exists(n => n.HasDeclarations) ||
+                return Enums.Any(pred) || HasFunctions || Typedefs.Any(pred)
+                    || Classes.Any() || Namespaces.Any(n => n.HasDeclarations) ||
                     Templates.Any(pred);
             }
         }
@@ -423,7 +361,7 @@ namespace CppSharp.AST
             get
             {
                 Func<Declaration, bool> pred = (t => t.IsGenerated);
-                return Functions.Exists(pred) || Namespaces.Exists(n => n.HasFunctions);
+                return Functions.Any(pred) || Namespaces.Any(n => n.HasFunctions);
             }
         }
 

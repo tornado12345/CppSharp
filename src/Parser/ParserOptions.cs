@@ -64,27 +64,42 @@ namespace CppSharp.Parser
             CurrentDir = Assembly.GetExecutingAssembly().Location;
         }
 
+        public ParserOptions(ParserOptions options)
+        {
+            Abi = options.Abi;
+            ToolSetToUse = options.ToolSetToUse;
+            TargetTriple = options.TargetTriple;
+            NoStandardIncludes = options.NoStandardIncludes;
+            NoBuiltinIncludes = options.NoBuiltinIncludes;
+            MicrosoftMode = options.MicrosoftMode;
+            Verbose = options.Verbose;
+            EnableRTTI = options.EnableRTTI;
+            LanguageVersion = options.LanguageVersion;
+            UnityBuild = options.UnityBuild;
+            SkipPrivateDeclarations = options.SkipPrivateDeclarations;
+            SkipFunctionBodies = options.SkipFunctionBodies;
+            SkipLayoutInfo = options.SkipLayoutInfo;
+            ForceClangToolchainLookup = options.ForceClangToolchainLookup;
+        }
+
         public bool IsItaniumLikeAbi => Abi != CppAbi.Microsoft;
         public bool IsMicrosoftAbi => Abi == CppAbi.Microsoft;
 
         public bool EnableRTTI { get; set; }
         public LanguageVersion? LanguageVersion { get; set; }
 
+        /// <summary>
+        /// This option forces the driver code to use Clang's toolchain code
+        /// to lookup the location of system headers and library locations.
+        /// At the moment, it only makes a difference for MSVC targets.
+        /// If its true, then we opt to use Clang's MSVC lookup logic.
+        /// </summary>
+        public bool ForceClangToolchainLookup = false;
+
         public ParserOptions BuildForSourceFile(
             IEnumerable<CppSharp.AST.Module> modules, string file = null)
         {
-            var options = new ParserOptions
-            {
-                Abi = this.Abi,
-                ToolSetToUse = this.ToolSetToUse,
-                TargetTriple = this.TargetTriple,
-                NoStandardIncludes = this.NoStandardIncludes,
-                NoBuiltinIncludes = this.NoBuiltinIncludes,
-                MicrosoftMode = this.MicrosoftMode,
-                Verbose = this.Verbose,
-                LanguageVersion = this.LanguageVersion,
-                UnityBuild = this.UnityBuild
-            };
+            var options = new ParserOptions(this);
 
             // This eventually gets passed to Clang's MSCompatibilityVersion, which
             // is in turn used to derive the value of the built-in define _MSC_VER.
@@ -186,20 +201,24 @@ namespace CppSharp.Parser
         public void SetupMSVC(VisualStudioVersion vsVersion)
         {
             MicrosoftMode = true;
-            NoBuiltinIncludes = true;
-            NoStandardIncludes = true;
             Abi = CppAbi.Microsoft;
 
-            vsVersion = MSVCToolchain.FindVSVersion(vsVersion);
-            foreach (var include in MSVCToolchain.GetSystemIncludes(vsVersion))
-                AddSystemIncludeDirs(include);
+            var clVersion = MSVCToolchain.GetCLVersion(vsVersion);
+            ToolSetToUse = clVersion.Major * 10000000 + clVersion.Minor * 100000;
+
+            if (!ForceClangToolchainLookup)
+            {
+                NoStandardIncludes = true;
+                NoBuiltinIncludes = true;
+
+                vsVersion = MSVCToolchain.FindVSVersion(vsVersion);
+                foreach (var include in MSVCToolchain.GetSystemIncludes(vsVersion))
+                    AddSystemIncludeDirs(include);
+            }
 
             // do not remove the CppSharp prefix becase the Mono C# compiler breaks
             if (!LanguageVersion.HasValue)
                 LanguageVersion = CppSharp.Parser.LanguageVersion.CPP14_GNU;
-
-            var clVersion = MSVCToolchain.GetCLVersion(vsVersion);
-            ToolSetToUse = clVersion.Major * 10000000 + clVersion.Minor * 100000;
 
             AddArguments("-fms-extensions");
             AddArguments("-fms-compatibility");

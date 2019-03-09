@@ -45,6 +45,9 @@ struct CS_API CppParserOptions
     bool microsoftMode;
     bool verbose;
     bool unityBuild;
+    bool skipPrivateDeclarations;
+    bool skipLayoutInfo;
+    bool skipFunctionBodies;
 };
 
 enum class ParserDiagnosticLevel

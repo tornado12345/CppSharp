@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 using CppSharp.Types;
+using CppSharp.Generators.C;
 
 namespace CppSharp.Passes
 {
@@ -108,8 +109,10 @@ namespace CppSharp.Passes
             Declaration decl;
             type.TryGetDeclaration(out decl);
             string msg = "internal";
+            TypeMap typeMap;
             if (!(type is FunctionType) && (decl == null ||
-                (decl.GenerationKind != GenerationKind.Internal &&
+                ((decl.GenerationKind != GenerationKind.Internal ||
+                  Context.TypeMaps.FindTypeMap(type, out typeMap)) &&
                  !HasInvalidType(field, out msg))))
                 return false;
 
@@ -511,11 +514,17 @@ namespace CppSharp.Passes
         private bool IsDeclIgnored(Declaration decl)
         {
             var parameter = decl as Parameter;
-            if (parameter != null && parameter.Type.Desugar().IsPrimitiveType(PrimitiveType.Null))
-                return true;
+            if (parameter != null)
+            {
+                if (parameter.Type.Desugar().IsPrimitiveType(PrimitiveType.Null))
+                    return true;
 
-            TypeMap typeMap;
-            return TypeMaps.FindTypeMap(decl, out typeMap) ? typeMap.IsIgnored : decl.Ignore;
+                TypeMap typeMap;
+                if (TypeMaps.FindTypeMap(parameter.Type, out typeMap))
+                    return typeMap.IsIgnored;
+            }
+
+            return decl.Ignore;
         }
 
         private void IgnoreUnsupportedTemplates(Class @class)

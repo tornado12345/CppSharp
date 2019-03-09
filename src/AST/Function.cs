@@ -63,7 +63,23 @@ namespace CppSharp.AST
         public ParameterUsage Usage { get; set; }
         public bool HasDefaultValue { get; set; }
 
-        public Expression DefaultArgument
+        public Stmt DefaultValue
+        {
+            get { return defaultValue; }
+            set
+            {
+                if (defaultValue != value)
+                {
+                    defaultValue = value;
+                    if (OriginalDefaultValue == null)
+                        OriginalDefaultValue = value;
+                }
+            }
+        }
+
+        public Stmt OriginalDefaultValue { get; private set; }
+
+        public ExpressionObsolete DefaultArgument
         {
             get
             {
@@ -77,7 +93,7 @@ namespace CppSharp.AST
             }
         }
 
-        public Expression OriginalDefaultArgument { get; set; }
+        public ExpressionObsolete OriginalDefaultArgument { get; set; }
 
         public bool IsIn => Usage == ParameterUsage.In;
         public bool IsOut => Usage == ParameterUsage.Out;
@@ -100,7 +116,8 @@ namespace CppSharp.AST
             get { return DebugText.StartsWith("const ", System.StringComparison.Ordinal); }
         }
 
-        Expression defaultArgument;
+        ExpressionObsolete defaultArgument;
+        private Stmt defaultValue;
     }
 
     public class ParameterTypeComparer : IEqualityComparer<Parameter>
@@ -250,6 +267,7 @@ namespace CppSharp.AST
         public string Mangled { get; set; }
         public string Signature { get; set; }
         public string Body { get; set; }
+        public Stmt BodyStmt { get; set; }
 
         public override T Visit<T>(IDeclVisitor<T> visitor)
         {

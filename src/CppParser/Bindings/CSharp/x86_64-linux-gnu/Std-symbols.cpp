@@ -1,8 +1,8 @@
+#define _LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS
+
 #include <string>
 
 
-template std::allocator<char>::allocator();
-template std::allocator<char>::~allocator();
-template std::basic_string<char, std::char_traits<char>, std::allocator<char>>::basic_string(const char*, const std::allocator<char>&);
-template std::basic_string<char, std::char_traits<char>, std::allocator<char>>::~basic_string() noexcept;
-template const char* std::basic_string<char, std::char_traits<char>, std::allocator<char>>::c_str() const noexcept;
+template class std::char_traits<char>;
+template class std::allocator<char>;
+template class std::basic_string<char, std::char_traits<char>, std::allocator<char>>;

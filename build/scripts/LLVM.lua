@@ -2,6 +2,7 @@ require "Build"
 require "Utils"
 require "../Helpers"
 
+local basedir = path.getdirectory(_PREMAKE_COMMAND)
 local llvm = path.getabsolute(basedir .. "/../deps/llvm")
 
 -- Prevent premake from inserting /usr/lib64 search path on linux. GCC does not need this path specified
@@ -34,7 +35,7 @@ function clone_llvm()
   print("Clang release: " .. clang_release)
 
   if os.ishost("windows") then
-    extract = extract_7z
+    extract = extract_7z_tar_gz
   else
     extract = extract_tar_gz
   end
@@ -112,15 +113,19 @@ function get_llvm_package_name(rev, conf, arch)
   local toolset = get_toolset_configuration_name(arch)
   table.insert(components, toolset)
 
-  if os.istarget("linux") then
-    local version = GccVersion()
-    if version < "5.0.0" then
-      -- Minor version matters only with gcc 4.8/4.9
-      version = string.match(version, "%d+.%d+")
-    else
-      version = string.match(version, "%d+")
-    end
-    table.insert(components, "gcc-"..version)
+	if os.istarget("linux") then
+		if UseClang() then
+			table.insert(components, "clang")
+		else
+			local version = GccVersion()
+			if version < "5.0.0" then
+				-- Minor version matters only with gcc 4.8/4.9
+				version = string.match(version, "%d+.%d+")
+			else
+				version = string.match(version, "%d+")
+			end
+			table.insert(components, "gcc-"..version)
+		end
   end
 
   if not conf then
@@ -128,12 +133,6 @@ function get_llvm_package_name(rev, conf, arch)
   end
 
   table.insert(components, conf)
-
-  if os.istarget("linux") then
-    if GccVersion() >= "4.9.0" and not UseCxx11ABI() then
-      table.insert(components, "no-cxx11")
-    end
-  end
 
   return table.concat(components, "-")
 end
@@ -153,9 +152,15 @@ function get_7z_path()
 	return "7z.exe"
 end
 
+function extract_7z_tar_gz(archive, dest_dir)
+	extract_7z(archive, dest_dir)
+	local tar = string.sub(archive, 1, -4)
+	extract_7z(tar, dest_dir)
+end
+
 function extract_7z(archive, dest_dir)
-	return execute_or_die(string.format("%s x %s -o%s -y", get_7z_path(),
-		archive, dest_dir), true)
+	return execute(string.format("%s x %s -o%s -y", get_7z_path(),
+		archive, dest_dir), false)
 end
 
 function extract_tar_xz(archive, dest_dir)
@@ -210,19 +215,28 @@ function cmake(gen, conf, builddir, options)
 	if options == nil then
 		options = ""
 	end
-	if not UseCxx11ABI() then
-		options = options.." -DCMAKE_CXX_FLAGS='-D_GLIBCXX_USE_CXX11_ABI=0'"
+
+	if UseClang() then
+		local cmake = path.join(basedir, "scripts", "ClangToolset.cmake")
+		options = options .. " -DLLVM_USE_LINKER=/usr/bin/ld.lld"
+	end
+
+	if os.ishost("windows") then
+		options = options .. "-Thost=x64"
 	end
 
 	local cmd = cmake .. " -G " .. '"' .. gen .. '"'
- 		.. ' -DLLVM_BUILD_TOOLS=false '
+		.. ' -DLLVM_BUILD_TOOLS=false'
+		.. ' -DLLVM_ENABLE_DUMP=true'
+		.. ' -DLLVM_ENABLE_DUMP=true'
+		.. ' -DLLVM_INCLUDE_TESTS=false'
  		.. ' -DLLVM_ENABLE_LIBEDIT=false'
- 		.. ' -DLLVM_ENABLE_ZLIB=false'
- 		.. ' -DLLVM_ENABLE_TERMINFO=false'
  		.. ' -DLLVM_ENABLE_LIBXML2=false'
- 		.. ' -DLLVM_INCLUDE_EXAMPLES=false '
- 		.. ' -DLLVM_INCLUDE_DOCS=false '
- 		.. ' -DLLVM_INCLUDE_TESTS=false'
+ 		.. ' -DLLVM_ENABLE_TERMINFO=false'
+ 		.. ' -DLLVM_ENABLE_ZLIB=false'
+ 		.. ' -DLLVM_INCLUDE_DOCS=false'
+ 		.. ' -DLLVM_INCLUDE_EXAMPLES=false'
+		.. ' -DLLVM_TARGETS_TO_BUILD="X86"'
 		.. ' -DLLVM_TOOL_BUGPOINT_BUILD=false'
  		.. ' -DLLVM_TOOL_BUGPOINT_PASSES_BUILD=false'
  		.. ' -DLLVM_TOOL_CLANG_TOOLS_EXTRA_BUILD=false'
@@ -231,66 +245,95 @@ function cmake(gen, conf, builddir, options)
  		.. ' -DLLVM_TOOL_DSYMUTIL_BUILD=false'
  		.. ' -DLLVM_TOOL_GOLD_BUILD=false'
  		.. ' -DLLVM_TOOL_LLC_BUILD=false'
- 		.. ' -DLLVM_TOOL_LLDB_BUILD=false'
  		.. ' -DLLVM_TOOL_LLD_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLDB_BUILD=false'
  		.. ' -DLLVM_TOOL_LLGO_BUILD=false'
  		.. ' -DLLVM_TOOL_LLI_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_AR_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_AS_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_AS_FUZZER_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_BCANALYZER_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_C_TEST_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_CAT_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_CFI_VERIFY_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_CONFIG_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_COV_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_CVTRES_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_CXXDUMP_BUILD=false'
- 		.. ' -DLLVM_TOOL_LLVM_C_TEST_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_CXXFILT_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_DEMANGLE_FUZZER_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_DIFF_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_DIS_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_DWARFDUMP_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_DWP_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_EXEGESIS_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_EXTRACT_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_GO_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_ISEL_FUZZER_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_JITLISTENER_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_LINK_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_LTO_BUILD=false'
- 		.. ' -DLLVM_TOOL_LLVM_MCMARKUP_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_LTO2_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_MC_ASSEMBLE_FUZZER_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_MC_BUILD=false'
- 		.. ' -DLLVM_TOOL_LLVM_MC_FUZZER_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_MC_DISASSEMBLE_FUZZER_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_MCA_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_MODEXTRACT_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_MT_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_NM_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_OBJCOPY_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_OBJDUMP_BUILD=false'
- 		.. ' -DLLVM_TOOL_LLVM_PDBDUMP_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_OPT_FUZZER_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_OPT_REPORT_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_PDBUTIL_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_PDBUTIL_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_PROFDATA_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_RC_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_READOBJ_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_RTDYLD_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_SHLIB_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_SIZE_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_SPECIAL_CASE_LIST_FUZZER_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_SPLIT_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_STRESS_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_STRINGS_BUILD=false'
  		.. ' -DLLVM_TOOL_LLVM_SYMBOLIZER_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_UNDNAME_BUILD=false'
+ 		.. ' -DLLVM_TOOL_LLVM_XRAY_BUILD=false'
  		.. ' -DLLVM_TOOL_LTO_BUILD=false'
- 		.. ' -DLLVM_TOOL_MSBUILD_BUILD=false'
  		.. ' -DLLVM_TOOL_OBJ2YAML_BUILD=false'
  		.. ' -DLLVM_TOOL_OPT_BUILD=false'
+ 		.. ' -DLLVM_TOOL_OPT_VIEWER_BUILD=false'
  		.. ' -DLLVM_TOOL_SANCOV_BUILD=false'
+ 		.. ' -DLLVM_TOOL_SANSTATS_BUILD=false'
  		.. ' -DLLVM_TOOL_VERIFY_USELISTORDER_BUILD=false'
  		.. ' -DLLVM_TOOL_XCODE_TOOLCHAIN_BUILD=false'
  		.. ' -DLLVM_TOOL_YAML2OBJ_BUILD=false'
 		.. ' -DCLANG_BUILD_EXAMPLES=false '
-		.. ' -DCLANG_INCLUDE_DOCS=false '
-		.. ' -DCLANG_INCLUDE_TESTS=false'
+		.. ' -DCLANG_BUILD_TOOLS=false'
 		.. ' -DCLANG_ENABLE_ARCMT=false'
 		.. ' -DCLANG_ENABLE_STATIC_ANALYZER=false'
+		.. ' -DCLANG_INCLUDE_DOCS=false '
+		.. ' -DCLANG_INCLUDE_TESTS=false'
 		.. ' -DCLANG_TOOL_ARCMT_TEST_BUILD=false'
- 		.. ' -DCLANG_TOOL_CLANG_CHECK_BUILD=false'
- 		.. ' -DCLANG_TOOL_CLANG_FORMAT_BUILD=false'
- 		.. ' -DCLANG_TOOL_CLANG_FORMAT_VS_BUILD=false'
- 		.. ' -DCLANG_TOOL_CLANG_FUZZER_BUILD=false'
  		.. ' -DCLANG_TOOL_C_ARCMT_TEST_BUILD=false'
  		.. ' -DCLANG_TOOL_C_INDEX_TEST_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_CHECK_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_DIFF_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_FORMAT_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_FORMAT_VS_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_FUNC_MAPPING_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_FUZZER_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_IMPORT_TEST_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_OFFLOAD_BUNDLER_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_REFACTOR_BUILD=false'
+ 		.. ' -DCLANG_TOOL_CLANG_RENAME_BUILD=false'
  		.. ' -DCLANG_TOOL_DIAGTOOL_BUILD=false'
- 		.. ' -DCLANG_TOOL_LIBCLANG_BUILD=false'
+ 		.. ' -DCLANG_TOOL_DRIVER_BUILD=false'
+		.. ' -DCLANG_TOOL_LIBCLANG_BUILD=false'
  		.. ' -DCLANG_TOOL_SCAN_BUILD_BUILD=false'
- 		.. ' -DCLANG_TOOL_SCAN_VIEW_BUILD=false'
- 		.. ' -DLLVM_TARGETS_TO_BUILD="X86"'
- 		.. ' -DCMAKE_BUILD_TYPE=' .. conf .. ' ..'
+		.. ' -DCLANG_TOOL_SCAN_VIEW_BUILD=false'
+		.. ' -DCMAKE_BUILD_TYPE=' .. conf .. ' ..'
  		.. ' -DCMAKE_OSX_DEPLOYMENT_TARGET=10.11'
  		.. ' ' .. options
  	execute_or_die(cmd)
@@ -321,7 +364,7 @@ function build_llvm(llvm_build)
 	os.mkdir(llvm_build)
 
 	local conf = get_llvm_configuration_name()
-	local use_msbuild = false
+	local use_msbuild = true
 	if os.ishost("windows") and use_msbuild then
 		cmake(get_cmake_generator(), conf, llvm_build)
 		local llvm_sln = path.join(llvm_build, "LLVM.sln")
@@ -333,6 +376,7 @@ function build_llvm(llvm_build)
 		if is32bits then
 			options = options .. (is32bits and " -DLLVM_BUILD_32_BITS=true" or "")
 		end
+
 		cmake("Ninja", conf, llvm_build, options)
 		ninja('"' .. llvm_build .. '"')
 		ninja('"' .. llvm_build .. '"', "clang-headers")
@@ -354,39 +398,38 @@ function package_llvm(conf, llvm, llvm_build)
 	os.copydir(llvm_build .. "/include", out .. "/build/include")
 
 	local llvm_msbuild_libdir = "/" .. conf .. "/lib"
-	local lib_dir =  os.ishost("windows") and os.isdir(llvm_msbuild_libdir)
+	local lib_dir =  (os.ishost("windows") and os.isdir(llvm_build .. llvm_msbuild_libdir))
 		and llvm_msbuild_libdir or "/lib"
 	local llvm_build_libdir = llvm_build .. lib_dir
 
 	if os.ishost("windows") and os.isdir(llvm_build_libdir) then
-		os.copydir(llvm_build_libdir, out .. "/build" .. lib_dir, "*.lib")
+		os.copydir(llvm_build_libdir, out .. "/build/lib", "*.lib")
 	else
 		os.copydir(llvm_build_libdir, out .. "/build/lib", "*.a")
 	end
 
 	os.copydir(llvm .. "/tools/clang/include", out .. "/tools/clang/include")
 	os.copydir(llvm_build .. "/tools/clang/include", out .. "/build/tools/clang/include")
-	os.copydir(llvm_build .. "/lib/clang", out .. "/lib/clang")
+
+	os.copydir(llvm_build_libdir .. "/clang", out .. "/lib/clang")
 
 	os.copydir(llvm .. "/tools/clang/lib/CodeGen", out .. "/tools/clang/lib/CodeGen", "*.h")
 	os.copydir(llvm .. "/tools/clang/lib/Driver", out .. "/tools/clang/lib/Driver", "*.h")
 	os.copydir(llvm .. "/tools/clang/lib/Driver/ToolChains", out .. "/tools/clang/lib/Driver/ToolChains", "*.h")
 
-	local out_lib_dir = out .. "/build" .. lib_dir
+	local out_lib_dir = out .. "/build/lib"
 	if os.ishost("windows") then
 		os.rmfiles(out_lib_dir, "LLVM*ObjCARCOpts*.lib")
 		os.rmfiles(out_lib_dir, "clang*ARC*.lib")
 		os.rmfiles(out_lib_dir, "clang*Matchers*.lib")
 		os.rmfiles(out_lib_dir, "clang*Rewrite*.lib")
 		os.rmfiles(out_lib_dir, "clang*StaticAnalyzer*.lib")
-		os.rmfiles(out_lib_dir, "clang*Tooling*.lib")
 	else
 		os.rmfiles(out_lib_dir, "libllvm*ObjCARCOpts*.a")
 		os.rmfiles(out_lib_dir, "libclang*ARC*.a")
 		os.rmfiles(out_lib_dir, "libclang*Matchers*.a")
 		os.rmfiles(out_lib_dir, "libclang*Rewrite*.a")
 		os.rmfiles(out_lib_dir, "libclang*StaticAnalyzer*.a")
-		os.rmfiles(out_lib_dir, "libclang*Tooling*.a")
 	end
 
 	return out

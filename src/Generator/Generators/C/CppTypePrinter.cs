@@ -1,9 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using CppSharp.AST;
 using CppSharp.AST.Extensions;
 
-namespace CppSharp.AST
+namespace CppSharp.Generators.C
 {
     public enum CppTypePrintFlavorKind
     {
@@ -12,17 +13,9 @@ namespace CppSharp.AST
         ObjC
     }
 
-    public enum TypePrintScopeKind
-    {
-        Local,
-        Qualified,
-        GlobalQualified
-    }
-
-    public class CppTypePrinter : ITypePrinter<string>, IDeclVisitor<string>
+    public class CppTypePrinter : TypePrinter
     {
         public CppTypePrintFlavorKind PrintFlavorKind { get; set; }
-        public TypePrintScopeKind PrintScopeKind { get; set; }
         public bool PrintLogicalNames { get; set; }
         public bool PrintTypeQualifiers { get; set; }
         public bool PrintTypeModifiers { get; set; }
@@ -31,20 +24,20 @@ namespace CppSharp.AST
         public CppTypePrinter()
         {
             PrintFlavorKind = CppTypePrintFlavorKind.Cpp;
-            PrintScopeKind = TypePrintScopeKind.GlobalQualified;
+            ScopeKind = TypePrintScopeKind.GlobalQualified;
             PrintTypeQualifiers = true;
             PrintTypeModifiers = true;
         }
 
         public bool ResolveTypedefs { get; set; }
 
-        public virtual string VisitTagType(TagType tag, TypeQualifiers quals)
+        public override TypePrinterResult VisitTagType(TagType tag, TypeQualifiers quals)
         {
             var qual = GetStringQuals(quals);
             return $"{qual}{tag.Declaration.Visit(this)}";
         }
 
-        public virtual string VisitArrayType(ArrayType array, TypeQualifiers quals)
+        public override TypePrinterResult VisitArrayType(ArrayType array, TypeQualifiers quals)
         {
             var typeName = array.Type.Visit(this);
 
@@ -65,7 +58,7 @@ namespace CppSharp.AST
         {
             switch (modifier)
             {
-                case PointerType.TypeModifier.Value: return string.Empty;
+                case PointerType.TypeModifier.Value: return "[]";
                 case PointerType.TypeModifier.Pointer: return "*";
                 case PointerType.TypeModifier.LVReference: return "&";
                 case PointerType.TypeModifier.RVReference: return "&&";
@@ -74,7 +67,7 @@ namespace CppSharp.AST
             return string.Empty;
         }
 
-        public virtual string VisitPointerType(PointerType pointer, TypeQualifiers quals)
+        public override TypePrinterResult VisitPointerType(PointerType pointer, TypeQualifiers quals)
         {
             var pointee = pointer.Pointee;
 
@@ -104,18 +97,18 @@ namespace CppSharp.AST
             return $"{pointeeType}{mod}{(string.IsNullOrEmpty(qual) ? string.Empty : " ")}{qual}";
         }
 
-        public virtual string VisitMemberPointerType(MemberPointerType member, TypeQualifiers quals)
+        public override TypePrinterResult VisitMemberPointerType(MemberPointerType member, TypeQualifiers quals)
         {
             return string.Empty;
         }
 
-        public virtual string VisitBuiltinType(BuiltinType builtin, TypeQualifiers quals)
+        public override TypePrinterResult VisitBuiltinType(BuiltinType builtin, TypeQualifiers quals)
         {
             var qual = GetStringQuals(quals);
             return $"{qual}{VisitPrimitiveType(builtin.Type)}";
         }
 
-        public virtual string VisitPrimitiveType(PrimitiveType primitive)
+        public TypePrinterResult VisitPrimitiveType(PrimitiveType primitive)
         {
             switch (primitive)
             {
@@ -177,26 +170,32 @@ namespace CppSharp.AST
             throw new NotSupportedException();
         }
 
-        public virtual string VisitTypedefType(TypedefType typedef, TypeQualifiers quals)
+        public override TypePrinterResult VisitPrimitiveType(PrimitiveType primitive, TypeQualifiers quals)
+        {
+            var qual = GetStringQuals(quals);
+            return $"{qual}{VisitPrimitiveType(primitive)}";
+        }
+
+        public override TypePrinterResult VisitTypedefType(TypedefType typedef, TypeQualifiers quals)
         {
             FunctionType func;
             if (ResolveTypedefs && !typedef.Declaration.Type.IsPointerTo(out func))
-                return typedef.Declaration.Type.Visit(this);
+                return typedef.Declaration.Type.Visit(this, quals);
             var qual = GetStringQuals(quals);
             return $"{qual}{typedef.Declaration.Visit(this)}";
         }
 
-        public virtual string VisitAttributedType(AttributedType attributed, TypeQualifiers quals)
+        public override TypePrinterResult VisitAttributedType(AttributedType attributed, TypeQualifiers quals)
         {
             return attributed.Modified.Visit(this);
         }
 
-        public virtual string VisitDecayedType(DecayedType decayed, TypeQualifiers quals)
+        public override TypePrinterResult VisitDecayedType(DecayedType decayed, TypeQualifiers quals)
         {
             return decayed.Decayed.Visit(this);
         }
 
-        public virtual string VisitTemplateSpecializationType(TemplateSpecializationType template, TypeQualifiers quals)
+        public override TypePrinterResult VisitTemplateSpecializationType(TemplateSpecializationType template, TypeQualifiers quals)
         {
             var specialization = template.GetClassTemplateSpecialization();
             if (specialization == null)
@@ -206,7 +205,7 @@ namespace CppSharp.AST
             return $"{qual}{VisitClassTemplateSpecializationDecl(specialization)}";
         }
 
-        public virtual string VisitDependentTemplateSpecializationType(
+        public override TypePrinterResult VisitDependentTemplateSpecializationType(
             DependentTemplateSpecializationType template, TypeQualifiers quals)
         {
             if (template.Desugared.Type != null)
@@ -214,7 +213,7 @@ namespace CppSharp.AST
             return string.Empty;
         }
 
-        public virtual string VisitTemplateParameterType(TemplateParameterType param, TypeQualifiers quals)
+        public override TypePrinterResult VisitTemplateParameterType(TemplateParameterType param, TypeQualifiers quals)
         {
             if (param.Parameter == null || param.Parameter.Name == null)
                 return string.Empty;
@@ -222,41 +221,41 @@ namespace CppSharp.AST
             return param.Parameter.Name;
         }
 
-        public virtual string VisitTemplateParameterSubstitutionType(
+        public override TypePrinterResult VisitTemplateParameterSubstitutionType(
             TemplateParameterSubstitutionType param, TypeQualifiers quals)
         {
             return param.Replacement.Type.Visit(this, quals);
         }
 
-        public virtual string VisitInjectedClassNameType(InjectedClassNameType injected, TypeQualifiers quals)
+        public override TypePrinterResult VisitInjectedClassNameType(InjectedClassNameType injected, TypeQualifiers quals)
         {
             return injected.Class.Visit(this);
         }
 
-        public virtual string VisitDependentNameType(DependentNameType dependent, TypeQualifiers quals)
+        public override TypePrinterResult VisitDependentNameType(DependentNameType dependent, TypeQualifiers quals)
         {
-            return dependent.Qualifier.Type != null ? dependent.Qualifier.Visit(this) : string.Empty;
+            return dependent.Qualifier.Type != null ? dependent.Qualifier.Visit(this).Type : string.Empty;
         }
 
-        public virtual string VisitPackExpansionType(PackExpansionType packExpansionType, TypeQualifiers quals)
+        public override TypePrinterResult VisitPackExpansionType(PackExpansionType packExpansionType, TypeQualifiers quals)
         {
             return string.Empty;
         }
 
-        public virtual string VisitUnaryTransformType(UnaryTransformType unaryTransformType, TypeQualifiers quals)
+        public override TypePrinterResult VisitUnaryTransformType(UnaryTransformType unaryTransformType, TypeQualifiers quals)
         {
             if (unaryTransformType.Desugared.Type != null)
                 return unaryTransformType.Desugared.Visit(this);
             return unaryTransformType.BaseType.Visit(this);
         }
 
-        public virtual string VisitVectorType(VectorType vectorType, TypeQualifiers quals)
+        public override TypePrinterResult VisitVectorType(VectorType vectorType, TypeQualifiers quals)
         {
             // an incomplete implementation but we'd hardly need anything better
             return "__attribute__()";
         }
 
-        public virtual string VisitCILType(CILType type, TypeQualifiers quals)
+        public override TypePrinterResult VisitCILType(CILType type, TypeQualifiers quals)
         {
             if (type.Type == typeof(string))
                 return quals.IsConst ? "const char*" : "char*";
@@ -292,22 +291,17 @@ namespace CppSharp.AST
             return "void*";
         }
 
-        public virtual string VisitUnsupportedType(UnsupportedType type, TypeQualifiers quals)
+        public override TypePrinterResult VisitUnsupportedType(UnsupportedType type, TypeQualifiers quals)
         {
             return string.Empty;
         }
 
-        public virtual string VisitPrimitiveType(PrimitiveType type, TypeQualifiers quals)
+        public override TypePrinterResult VisitDeclaration(Declaration decl, TypeQualifiers quals)
         {
             throw new NotImplementedException();
         }
 
-        public virtual string VisitDeclaration(Declaration decl, TypeQualifiers quals)
-        {
-            throw new NotImplementedException();
-        }
-
-        public virtual string VisitFunctionType(FunctionType function, TypeQualifiers quals)
+        public override TypePrinterResult VisitFunctionType(FunctionType function, TypeQualifiers quals)
         {
             var arguments = function.Parameters;
             var returnType = function.ReturnType;
@@ -319,7 +313,7 @@ namespace CppSharp.AST
             return string.Format("{0} ({1})", returnType.Visit(this), args);
         }
 
-        public virtual string VisitParameters(IEnumerable<Parameter> @params,
+        public override TypePrinterResult VisitParameters(IEnumerable<Parameter> @params,
             bool hasNames = true)
         {
             var args = new List<string>();
@@ -333,9 +327,9 @@ namespace CppSharp.AST
             return string.Join(", ", args);
         }
 
-        public virtual string VisitParameter(Parameter arg, bool hasName = true)
+        public override TypePrinterResult VisitParameter(Parameter arg, bool hasName = true)
         {
-            var type = arg.Type.Visit(this, arg.QualifiedType.Qualifiers);
+            var type = arg.Type.Visit(this, arg.QualifiedType.Qualifiers).Type;
             var name = arg.Name;
             var printName = hasName && !string.IsNullOrEmpty(name);
 
@@ -346,12 +340,12 @@ namespace CppSharp.AST
             return printName ? string.Format("{0} {1}", type, name) : type;
         }
 
-        public virtual string VisitDelegate(FunctionType function)
+        public override TypePrinterResult VisitDelegate(FunctionType function)
         {
             throw new NotImplementedException();
         }
 
-        public virtual string GetDeclName(Declaration declaration, TypePrintScopeKind scope)
+        public TypePrinterResult GetDeclName(Declaration declaration, TypePrintScopeKind scope)
         {
             switch (scope)
             {
@@ -373,22 +367,22 @@ namespace CppSharp.AST
             throw new NotSupportedException();
         }
 
-        public virtual string VisitDeclaration(Declaration decl)
+        public override TypePrinterResult VisitDeclaration(Declaration decl)
         {
-            return GetDeclName(decl, PrintScopeKind);
+            return GetDeclName(decl, ScopeKind);
         }
 
-        public string VisitTranslationUnit(TranslationUnit unit)
+        public override TypePrinterResult VisitTranslationUnit(TranslationUnit unit)
         {
             return VisitDeclaration(unit);
         }
 
-        public virtual string VisitClassDecl(Class @class)
+        public override TypePrinterResult VisitClassDecl(Class @class)
         {
             return VisitDeclaration(@class);
         }
 
-        public virtual string VisitClassTemplateSpecializationDecl(ClassTemplateSpecialization specialization)
+        public override TypePrinterResult VisitClassTemplateSpecializationDecl(ClassTemplateSpecialization specialization)
         {
             return string.Format("{0}<{1}>", specialization.TemplatedDecl.Visit(this),
                 string.Join(", ",
@@ -397,17 +391,17 @@ namespace CppSharp.AST
                         !(a.Type.Type is DependentNameType)).Select(a => a.Type.Visit(this))));
         }
 
-        public virtual string VisitFieldDecl(Field field)
+        public override TypePrinterResult VisitFieldDecl(Field field)
         {
             return VisitDeclaration(field);
         }
 
-        public virtual string VisitFunctionDecl(Function function)
+        public override TypePrinterResult VisitFunctionDecl(Function function)
         {
             return VisitDeclaration(function);
         }
 
-        public virtual string VisitMethodDecl(Method method)
+        public override TypePrinterResult VisitMethodDecl(Method method)
         {
             // HACK: this should never happen but there's an inexplicable crash with the 32-bit Windows CI - I have no time to fix it right now
             var functionType = method.FunctionType.Type.Desugar() as FunctionType;
@@ -430,12 +424,12 @@ namespace CppSharp.AST
             return $"{returnType}{@class}::{name}({@params}){@const}{exceptionType}";
         }
 
-        public virtual string VisitParameterDecl(Parameter parameter)
+        public override TypePrinterResult VisitParameterDecl(Parameter parameter)
         {
             return VisitParameter(parameter, hasName: false);
         }
 
-        public virtual string VisitTypedefDecl(TypedefDecl typedef)
+        public override TypePrinterResult VisitTypedefDecl(TypedefDecl typedef)
         {
             if (ResolveTypedefs)
                 return typedef.Type.Visit(this);
@@ -444,76 +438,77 @@ namespace CppSharp.AST
                 return typedef.OriginalName;
 
             var originalNamespace = typedef.OriginalNamespace.Visit(this);
-            return originalNamespace == "::" ? typedef.OriginalName :
-                $"{originalNamespace}::{typedef.OriginalName}";
+            return string.IsNullOrEmpty(originalNamespace) ||
+                originalNamespace == "::" ?
+                typedef.OriginalName : $"{originalNamespace}::{typedef.OriginalName}";
         }
 
-        public virtual string VisitTypeAliasDecl(TypeAlias typeAlias)
+        public override TypePrinterResult VisitTypeAliasDecl(TypeAlias typeAlias)
         {
             return VisitDeclaration(typeAlias);
         }
 
-        public virtual string VisitEnumDecl(Enumeration @enum)
+        public override TypePrinterResult VisitEnumDecl(Enumeration @enum)
         {
             return VisitDeclaration(@enum);
         }
 
-        public virtual string VisitEnumItemDecl(Enumeration.Item item)
+        public override TypePrinterResult VisitEnumItemDecl(Enumeration.Item item)
         {
             return VisitDeclaration(item);
         }
 
-        public virtual string VisitVariableDecl(Variable variable)
+        public override TypePrinterResult VisitVariableDecl(Variable variable)
         {
             return VisitDeclaration(variable);
         }
 
-        public virtual string VisitClassTemplateDecl(ClassTemplate template)
+        public override TypePrinterResult VisitClassTemplateDecl(ClassTemplate template)
         {
             return VisitDeclaration(template);
         }
 
-        public virtual string VisitFunctionTemplateDecl(FunctionTemplate template)
+        public override TypePrinterResult VisitFunctionTemplateDecl(FunctionTemplate template)
         {
             return VisitDeclaration(template);
         }
 
-        public virtual string VisitMacroDefinition(MacroDefinition macro)
+        public override TypePrinterResult VisitMacroDefinition(MacroDefinition macro)
         {
             throw new NotImplementedException();
         }
 
-        public virtual string VisitNamespace(Namespace @namespace)
+        public override TypePrinterResult VisitNamespace(Namespace @namespace)
         {
             return VisitDeclaration(@namespace);
         }
 
-        public virtual string VisitEvent(Event @event)
+        public override TypePrinterResult VisitEvent(Event @event)
         {
             return string.Empty;
         }
 
-        public virtual string VisitProperty(Property property)
+        public override TypePrinterResult VisitProperty(Property property)
         {
             return VisitDeclaration(property);
         }
 
-        public virtual string VisitFriend(Friend friend)
+        public override TypePrinterResult VisitFriend(Friend friend)
         {
             throw new NotImplementedException();
         }
 
-        public virtual string ToString(Type type)
+        public override string ToString(CppSharp.AST.Type type)
         {
             return type.Visit(this);
         }
 
-        public virtual string VisitTemplateTemplateParameterDecl(TemplateTemplateParameter templateTemplateParameter)
+        public override TypePrinterResult VisitTemplateTemplateParameterDecl(TemplateTemplateParameter templateTemplateParameter)
         {
             return templateTemplateParameter.Name;
         }
 
-        public virtual string VisitTemplateParameterDecl(TypeTemplateParameter templateParameter)
+        public override TypePrinterResult VisitTemplateParameterDecl(TypeTemplateParameter templateParameter)
         {
             if (templateParameter.DefaultArgument.Type == null)
                 return templateParameter.Name;
@@ -521,7 +516,7 @@ namespace CppSharp.AST
             return $"{templateParameter.Name} = {templateParameter.DefaultArgument.Visit(this)}";
         }
 
-        public virtual string VisitNonTypeTemplateParameterDecl(NonTypeTemplateParameter nonTypeTemplateParameter)
+        public override TypePrinterResult VisitNonTypeTemplateParameterDecl(NonTypeTemplateParameter nonTypeTemplateParameter)
         {
             if (nonTypeTemplateParameter.DefaultArgument == null)
                 return nonTypeTemplateParameter.Name;
@@ -529,27 +524,27 @@ namespace CppSharp.AST
             return $"{nonTypeTemplateParameter.Name} = {nonTypeTemplateParameter.DefaultArgument.String}";
         }
 
-        public string VisitTypedefNameDecl(TypedefNameDecl typedef)
+        public override TypePrinterResult VisitTypedefNameDecl(TypedefNameDecl typedef)
         {
             throw new NotImplementedException();
         }
 
-        public virtual string VisitTypeAliasTemplateDecl(TypeAliasTemplate typeAliasTemplate)
+        public override TypePrinterResult VisitTypeAliasTemplateDecl(TypeAliasTemplate typeAliasTemplate)
         {
             throw new NotImplementedException();
         }
 
-        public virtual string VisitFunctionTemplateSpecializationDecl(FunctionTemplateSpecialization specialization)
+        public override TypePrinterResult VisitFunctionTemplateSpecializationDecl(FunctionTemplateSpecialization specialization)
         {
             throw new NotImplementedException();
         }
 
-        public virtual string VisitVarTemplateDecl(VarTemplate template)
+        public override TypePrinterResult VisitVarTemplateDecl(VarTemplate template)
         {
             return VisitDeclaration(template);
         }
 
-        public virtual string VisitVarTemplateSpecializationDecl(VarTemplateSpecialization template)
+        public override TypePrinterResult VisitVarTemplateSpecializationDecl(VarTemplateSpecialization template)
         {
             throw new NotImplementedException();
         }

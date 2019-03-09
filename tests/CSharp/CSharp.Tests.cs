@@ -23,6 +23,7 @@ public unsafe class CSharpTests : GeneratorTestFixture
 #pragma warning disable 0219 // warning CS0219: The variable `foo' is assigned but its value is never used
 
         ALLCAPS_UNDERSCORES a;
+        new MultipleInheritance().Dispose();
         using (var testRenaming = new TestRenaming())
         {
             testRenaming.name();
@@ -34,6 +35,7 @@ public unsafe class CSharpTests : GeneratorTestFixture
         new InheritanceBuffer().Dispose();
         new HasProtectedVirtual().Dispose();
         new Proprietor(5).Dispose();
+        new HasCtorWithMappedToEnum<TestFlag>(TestFlag.Flag1).Dispose();
         using (var testOverrideFromSecondaryBase = new TestOverrideFromSecondaryBase())
         {
             testOverrideFromSecondaryBase.function();
@@ -52,12 +54,19 @@ public unsafe class CSharpTests : GeneratorTestFixture
                 hasSecondaryBaseWithAbstractWithDefaultArg.Abstract();
                 hasSecondaryBaseWithAbstractWithDefaultArg.AbstractWithNoDefaultArg(foo);
             }
+            Assert.That(foo.PublicFieldMappedToEnum, Is.EqualTo(TestFlag.Flag2));
+            Assert.That(foo.ReturnConstRef(), Is.EqualTo(5));
         }
         using (var hasOverride = new HasOverrideOfHasPropertyWithDerivedType())
             hasOverride.CauseRenamingError();
         using (var qux = new Qux())
         {
             new Bar(qux).Dispose();
+        }
+        using (var quux = new Quux())
+        {
+            quux.SetterWithDefaultOverload = null;
+            quux.SetSetterWithDefaultOverload();
         }
         using (ComplexType complexType = TestFlag.Flag1)
         {
@@ -74,6 +83,18 @@ public unsafe class CSharpTests : GeneratorTestFixture
         using (CSharpTemplates.SpecialiseReturnOnly())
         {
         }
+
+        using (var t1 = new T1())
+        using (new IndependentFields<int>(t1))
+        {
+        }
+
+        using (var t2 = new T2())
+        using (new IndependentFields<int>(t2))
+        {
+        }
+
+        CSharp.CSharp.ReturnCharPointer();
 
 #pragma warning restore 0168
 #pragma warning restore 0219
@@ -206,9 +227,11 @@ public unsafe class CSharpTests : GeneratorTestFixture
         {
             methodsWithDefaultValues.DefaultPointer();
             methodsWithDefaultValues.DefaultVoidStar();
+            methodsWithDefaultValues.DefaultFunctionPointer();
             methodsWithDefaultValues.DefaultValueType();
             methodsWithDefaultValues.DefaultChar();
             methodsWithDefaultValues.DefaultEmptyChar();
+            methodsWithDefaultValues.DefaultEmptyEnum();
             methodsWithDefaultValues.DefaultRefTypeBeforeOthers();
             methodsWithDefaultValues.DefaultRefTypeAfterOthers();
             methodsWithDefaultValues.DefaultRefTypeBeforeAndAfterOthers(0, null);
@@ -234,6 +257,7 @@ public unsafe class CSharpTests : GeneratorTestFixture
             methodsWithDefaultValues.DefaultDoubleWithoutF();
             methodsWithDefaultValues.DefaultIntExpressionWithEnum();
             methodsWithDefaultValues.DefaultCtorWithMoreThanOneArg();
+            methodsWithDefaultValues.DefaultEmptyBraces();
             methodsWithDefaultValues.DefaultWithRefManagedLong();
             methodsWithDefaultValues.DefaultWithFunctionCall();
             methodsWithDefaultValues.DefaultWithPropertyCall();
@@ -717,6 +741,14 @@ public unsafe class CSharpTests : GeneratorTestFixture
         using (var virtualTemplate = new VirtualTemplate<int>())
         {
             Assert.That(virtualTemplate.Function, Is.EqualTo(5));
+            int i = 15;
+            Assert.That(*virtualTemplate.Function(ref i), Is.EqualTo(15));
+        }
+        using (var virtualTemplate = new VirtualTemplate<bool>())
+        {
+            Assert.That(virtualTemplate.Function, Is.EqualTo(5));
+            bool b = true;
+            Assert.That(*virtualTemplate.Function(ref b), Is.EqualTo(true));
         }
     }
 
@@ -827,8 +859,21 @@ public unsafe class CSharpTests : GeneratorTestFixture
             {
                 dependentValueFields.DependentValue = 10;
                 other.DependentValue = 15;
-                Assert.That((dependentValueFields + other).DependentValue, Is.EqualTo(25));
+                Assert.That(dependentValueFields.DependentValue, Is.EqualTo(10));
+                Assert.That((other).DependentValue, Is.EqualTo(15));
+                Assert.That((dependentValueFields + other).DependentValue, Is.EqualTo(0));
             }
+        }
+    }
+
+    [Test]
+    public void TestTemplateSpecializationWithPointer()
+    {
+        using (var dependentValueFields = new DependentValueFields<IntPtr>())
+        {
+            int i = 10;
+            dependentValueFields.DependentValue = (IntPtr) (&i);
+            Assert.That(*(int*) dependentValueFields.DependentValue, Is.EqualTo(10));
         }
     }
 
@@ -1197,11 +1242,29 @@ public unsafe class CSharpTests : GeneratorTestFixture
         }
     }
 
+    [Test]
+    public void TestVirtualIndirectCallInNative()
+    {
+        using (Inter i = new Inter())
+        {
+            using (InterfaceTester tester = new InterfaceTester())
+            {
+                tester.SetInterface(i);
+                Assert.That(tester.Get(10), Is.EqualTo(IntPtr.Zero));
+            }
+        }
+    }
+
+    public class Inter : SimpleInterface
+    {
+        public override int Size => s;
+        public override int Capacity => s;
+        public override IntPtr Get(int n) { return new IntPtr(0); }
+        private int s = 0;
+    }
+
     private class OverrideVirtualTemplate : VirtualTemplate<int>
     {
-        public override int Function
-        {
-            get { return 10; }
-        }
+        public override int Function() => 10;
     }
 }

@@ -2,24 +2,27 @@
 using System.Globalization;
 using System.Linq;
 using CppSharp.AST;
+using CppSharp.AST.Extensions;
 using CppSharp.Generators;
+using CppSharp.Generators.CLI;
+using CppSharp.Generators.CSharp;
 
 namespace CppSharp.Passes
 {
     class DeclarationName
     {
-        private readonly Dictionary<string, int> methodSignatures;
+        private readonly Dictionary<Function, int> functions;
         private int Count;
 
         public DeclarationName()
         {
-            methodSignatures = new Dictionary<string, int>();
+            functions = new Dictionary<Function, int>();
         }
 
         public bool UpdateName(Declaration decl)
         {
             var function = decl as Function;
-            if (function != null && !(function.Namespace is ClassTemplateSpecialization))
+            if (function != null)
             {
                 return UpdateName(function);
             }
@@ -41,42 +44,33 @@ namespace CppSharp.Passes
 
         private bool UpdateName(Function function)
         {
-            var @params = function.Parameters.Where(p => p.Kind != ParameterKind.IndirectReturnType)
-                                .Select(p => p.QualifiedType.ToString());
-            // Include the conversion type in case of conversion operators
-            var method = function as Method;
-            if (method != null &&
-                method.IsOperator &&
-                (method.OperatorKind == CXXOperatorKind.Conversion ||
-                 method.OperatorKind == CXXOperatorKind.ExplicitConversion))
-                @params = @params.Concat(new[] { method.ConversionType.ToString() });
-            var signature = string.Format("{0}({1})", function.Name, string.Join( ", ", @params));
-            signature = FixSignatureForConversions(function, signature);
-
             if (Count == 0)
                 Count++;
 
-            if (!methodSignatures.ContainsKey(signature))
+            var duplicate = functions.Keys.FirstOrDefault(f =>
+                function.SynthKind != FunctionSynthKind.DefaultValueOverload &&
+                f.Parameters.SequenceEqual(function.Parameters, ParameterTypeComparer.Instance));
+
+            if (duplicate == null)
             {
-                methodSignatures.Add(signature, 0);
+                functions.Add(function, 0);
                 return false;
             }
 
-            var methodCount = ++methodSignatures[signature];
+            var methodCount = ++functions[duplicate];
 
             if (Count < methodCount + 1)
                 Count = methodCount + 1;
 
+            var method = function as Method;
             if (function.IsOperator)
             {
                 // TODO: turn into a method; append the original type (say, "signed long")
                 // of the last parameter to the type so that the user knows which overload is called
-                Diagnostics.Warning("Duplicate operator {0} ignored", function.Name);
                 function.ExplicitlyIgnore();
             }
             else if (method != null && method.IsConstructor)
             {
-                Diagnostics.Warning("Duplicate constructor {0} ignored", function.Name);
                 function.ExplicitlyIgnore();
             }
             else
@@ -98,6 +92,32 @@ namespace CppSharp.Passes
             }
             return signature;
         }
+
+        public class ParameterTypeComparer : IEqualityComparer<Parameter>
+        {
+            public static readonly ParameterTypeComparer Instance = new ParameterTypeComparer();
+
+            public bool Equals(Parameter x, Parameter y)
+            {
+                Type left = x.Type.Desugar(resolveTemplateSubstitution: false);
+                Type right = y.Type.Desugar(resolveTemplateSubstitution: false);
+                if (left.Equals(right))
+                    return true;
+
+                // TODO: some target languages might make a difference between values and pointers
+                Type leftPointee = left.GetPointee();
+                Type rightPointee = right.GetPointee();
+                return (leftPointee != null && leftPointee.Desugar(false).Equals(right)) ||
+                    (rightPointee != null && rightPointee.Desugar(false).Equals(left));
+            }
+
+            public int GetHashCode(Parameter obj)
+            {
+                return obj.Type.GetHashCode();
+            }
+
+            public static TypePrinter TypePrinter { get; set; }
+        }
     }
 
     public class CheckDuplicatedNamesPass : TranslationUnitPass
@@ -108,6 +128,22 @@ namespace CppSharp.Passes
         {
             ClearVisitedDeclarations = false;
             names = new Dictionary<string, DeclarationName>();
+        }
+
+        public override bool VisitASTContext(ASTContext context)
+        {
+            TypePrinter typePrinter = null;
+            switch (Options.GeneratorKind)
+            {
+                case GeneratorKind.CLI:
+                    typePrinter = new CLITypePrinter(Context);
+                    break;
+                case GeneratorKind.CSharp:
+                    typePrinter = new CSharpTypePrinter(Context);
+                    break;
+            }
+            DeclarationName.ParameterTypeComparer.TypePrinter = typePrinter;
+            return base.VisitASTContext(context);
         }
 
         public override bool VisitProperty(Property decl)
@@ -180,15 +216,6 @@ namespace CppSharp.Passes
                 VisitProperty(property);
 
             return false;
-        }
-
-        private static IEnumerable<Field> GetAllFields(Class @class, List<Field> fields = null)
-        {
-            fields = fields ?? new List<Field>();
-            foreach (var @base in @class.Bases.Where(b => b.IsClass && b.Class != @class))
-                GetAllFields(@base.Class, fields);
-            fields.AddRange(@class.Fields);
-            return fields;
         }
 
         private void CheckDuplicate(Declaration decl)

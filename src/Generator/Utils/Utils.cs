@@ -49,13 +49,6 @@ namespace CppSharp
             return str.Trim().Split();
         }
 
-        public static IEnumerable<string> SplitAndKeep(this string s, string seperator)
-        {
-            string[] obj = s.Split(new[] { seperator }, StringSplitOptions.None);
-
-            return obj.Select((t, i) => i == obj.Length - 1 ? t : t + seperator);
-        }
-
         public static string Capitalize(string s)
         {
             // Check for empty string.
@@ -134,6 +127,5 @@ namespace CppSharp
 
             return uri1.MakeRelativeUri(uri2).ToString();
         }
-        
     }
 }

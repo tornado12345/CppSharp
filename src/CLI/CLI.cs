@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Mono.Options;
 
 namespace CppSharp
@@ -30,7 +31,8 @@ namespace CppSharp
             optionSet.Add("p=|platform=", "the {PLATFORM} that the generated code will target: 'win', 'osx' or 'linux'", p => { GetDestinationPlatform(p, errorMessages); } );
             optionSet.Add("a=|arch=", "the {ARCHITECTURE} that the generated code will target: 'x86' or 'x64'", a => { GetDestinationArchitecture(a, errorMessages); } );
 
-            optionSet.Add("exceptions", "enables support for C++ exceptions in the parser", v => { options.Arguments.Add("-fcxx-exceptions"); });
+            optionSet.Add("exceptions", "enables support for C++ exceptions in the parser", v => { options.EnableExceptions = true; });
+            optionSet.Add("rtti", "enables support for C++ RTTI in the parser", v => { options.EnableRTTI = true; });
 
             optionSet.Add("c++11", "enables GCC C++ 11 compilation (valid only for Linux platform)", cpp11 => { options.Cpp11ABI = (cpp11 != null); } );
             optionSet.Add("cs|checksymbols", "enable the symbol check for the generated code", cs => { options.CheckSymbols = (cs != null); } );
@@ -151,12 +153,12 @@ namespace CppSharp
                     options.HeaderFiles.Add(args);
                 else
                 {
-                    errorMessages.Add(string.Format("File '{0}' could not be found.", args));
+                    errorMessages.Add($"File '{args}' could not be found.");
                 }
             }
             catch(Exception)
             {
-                errorMessages.Add(string.Format("Error while looking for files inside path '{0}'. Ignoring.", args));
+                errorMessages.Add($"Error while looking for files inside path '{args}'. Ignoring.");
             }
         }
 
@@ -187,10 +189,9 @@ namespace CppSharp
                 }
                 else
                 {
-                    string[] files = Directory.GetFiles(path);
-
-                    foreach (string s in files)
-                        options.HeaderFiles.Add(s);
+                    var files = Directory.GetFiles(path).Where(f =>
+                        Path.GetExtension(f) == ".h" || Path.GetExtension(f) == ".hpp");
+                    options.HeaderFiles.AddRange(files);
                 }
             }
             catch (Exception)
@@ -280,7 +281,9 @@ namespace CppSharp
             catch (Exception ex)
             {
                 PrintErrorMessages(errorMessages);
-                Console.Error.WriteLine(ex.Message);
+                Console.Error.WriteLine();
+
+                throw ex;
             }
         }
     }

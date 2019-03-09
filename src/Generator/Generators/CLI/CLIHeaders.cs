@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
+using CppSharp.Generators.C;
 using CppSharp.Generators.CSharp;
 
 namespace CppSharp.Generators.CLI
@@ -194,14 +195,14 @@ namespace CppSharp.Generators.CLI
                 WriteLine("namespace {0}", isTopLevel
                                                ? @namespace.TranslationUnit.Module.OutputNamespace
                                                : @namespace.Name);
-                WriteStartBraceIndent();
+                WriteOpenBraceAndIndent();
             }
 
             GenerateDeclContext(@namespace);
 
             if (generateNamespace)
             {
-                WriteCloseBraceIndent();
+                UnindentAndWriteCloseBrace();
                 PopBlock(NewLineKind.BeforeNextBlock);
             }
         }
@@ -224,7 +225,7 @@ namespace CppSharp.Generators.CLI
             WriteLine("public ref class {0}", TranslationUnit.FileNameWithoutExtension);
             WriteLine("{");
             WriteLine("public:");
-            PushIndent();
+            Indent();
 
             // Generate all the function declarations for the module.
             foreach (var function in decl.Functions)
@@ -232,7 +233,7 @@ namespace CppSharp.Generators.CLI
                 GenerateFunction(function);
             }
 
-            PopIndent();
+            Unindent();
             WriteLine("};");
 
             PopBlock(NewLineKind.BeforeNextBlock);
@@ -259,9 +260,9 @@ namespace CppSharp.Generators.CLI
             NewLine();
 
             // Process the nested types.
-            PushIndent();
+            Indent();
             GenerateDeclContext(@class);
-            PopIndent();
+            Unindent();
 
             var nativeType = string.Format("::{0}*", @class.QualifiedOriginalName);
 
@@ -308,20 +309,20 @@ namespace CppSharp.Generators.CLI
         {
             WriteLineIndent("property {0} NativePtr;", nativeType);
 
-            PushIndent();
+            Indent();
             WriteLine("property System::IntPtr {0}", Helpers.InstanceIdentifier);
-            WriteStartBraceIndent();
+            WriteOpenBraceAndIndent();
             WriteLine("virtual System::IntPtr get();");
             WriteLine("virtual void set(System::IntPtr instance);");
-            WriteCloseBraceIndent();
+            UnindentAndWriteCloseBrace();
             NewLine();
 
-            PopIndent();
+            Unindent();
         }
 
         public void GenerateClassGenericMethods(Class @class)
         {
-            PushIndent();
+            Indent();
             foreach (var template in @class.Templates)
             {
                 if (!template.IsGenerated) continue;
@@ -333,10 +334,7 @@ namespace CppSharp.Generators.CLI
 
                 var function = functionTemplate.TemplatedFunction;
 
-                var typePrinter = new CLITypePrinter(Context)
-                {
-                    Declaration = template
-                };
+                var typePrinter = new CLITypePrinter(Context);
                 typePrinter.PushContext(TypePrinterContextKind.Template);
 
                 var retType = function.ReturnType.Visit(typePrinter);
@@ -368,7 +366,7 @@ namespace CppSharp.Generators.CLI
 
                 PopBlock(NewLineKind.BeforeNextBlock);
             }
-            PopIndent();
+            Unindent();
         }
 
         public void GenerateClassConstructors(Class @class, string nativeType)
@@ -376,7 +374,7 @@ namespace CppSharp.Generators.CLI
             if (@class.IsStatic)
                 return;
 
-            PushIndent();
+            Indent();
 
             // Output a default constructor that takes the native pointer.
             WriteLine("{0}({1} native);", @class.Name, nativeType);
@@ -407,7 +405,7 @@ namespace CppSharp.Generators.CLI
                 }
             }
 
-            PopIndent();
+            Unindent();
         }
 
         private void GenerateClassDestructor(Class @class)
@@ -436,7 +434,7 @@ namespace CppSharp.Generators.CLI
                 }
             }
 
-            PushIndent();
+            Indent();
             // check for value types because some of the ignored fields may back properties;
             // not the case for ref types because the NativePtr pattern is used there
             foreach (var field in @class.Fields.Where(f => !ASTUtils.CheckIgnoreField(f)))
@@ -447,7 +445,7 @@ namespace CppSharp.Generators.CLI
                     GenerateField(@class, field);
                 }
             }
-            PopIndent();
+            Unindent();
         }
 
         private void GenerateField(Class @class, Field field)
@@ -473,7 +471,7 @@ namespace CppSharp.Generators.CLI
                 var cppArgs = cppTypePrinter.VisitParameters(@event.Parameters, hasNames: true);
 
                 WriteLine("private:");
-                PushIndent();
+                Indent();
 
                 var delegateName = string.Format("_{0}Delegate", @event.Name);
                 WriteLine("delegate void {0}({1});", delegateName, cppArgs);
@@ -482,12 +480,12 @@ namespace CppSharp.Generators.CLI
                 WriteLine("void _{0}Raise({1});", @event.Name, cppArgs);
                 WriteLine("{0} _{1};", @event.Type, @event.Name);
 
-                PopIndent();
+                Unindent();
                 WriteLine("public:");
-                PushIndent();
+                Indent();
 
                 WriteLine("event {0} {1}", @event.Type, @event.Name);
-                WriteStartBraceIndent();
+                WriteOpenBraceAndIndent();
 
                 WriteLine("void add({0} evt);", @event.Type);
                 WriteLine("void remove({0} evt);", @event.Type);
@@ -496,8 +494,8 @@ namespace CppSharp.Generators.CLI
                 var cliArgs = cliTypePrinter.VisitParameters(@event.Parameters, hasNames: true);
 
                 WriteLine("void raise({0});", cliArgs);
-                WriteCloseBraceIndent();
-                PopIndent();
+                UnindentAndWriteCloseBrace();
+                Unindent();
             }
         }
 
@@ -506,7 +504,7 @@ namespace CppSharp.Generators.CLI
             if (methods.Count == 0)
                 return;
 
-            PushIndent();
+            Indent();
 
             var @class = (Class) methods[0].Namespace;
 
@@ -535,12 +533,12 @@ namespace CppSharp.Generators.CLI
             foreach(var method in staticMethods)
                 GenerateMethod(method);
 
-            PopIndent();
+            Unindent();
         }
 
         public void GenerateClassVariables(Class @class)
         {
-            PushIndent();
+            Indent();
 
             foreach(var variable in @class.Variables)
             {
@@ -555,7 +553,7 @@ namespace CppSharp.Generators.CLI
 
                 WriteLine("static property {0} {1}", type, variable.Name);
 
-                WriteStartBraceIndent();
+                WriteOpenBraceAndIndent();
 
                 WriteLine("{0} get();", type);
 
@@ -564,12 +562,12 @@ namespace CppSharp.Generators.CLI
                 if (!qualifiedType.Qualifiers.IsConst)
                     WriteLine("void set({0});", type);
 
-                WriteCloseBraceIndent();
+                UnindentAndWriteCloseBrace();
 
                 PopBlock(NewLineKind.BeforeNextBlock);
             }
 
-            PopIndent();
+            Unindent();
         }
 
         public override void GenerateClassSpecifier(Class @class)
@@ -612,7 +610,7 @@ namespace CppSharp.Generators.CLI
                 }
             }
 
-            PushIndent();
+            Indent();
             foreach (var prop in @class.Properties.Where(
                 prop => !ASTUtils.CheckIgnoreProperty(prop) && !TypeIgnored(prop.Type)))
             {
@@ -625,7 +623,7 @@ namespace CppSharp.Generators.CLI
                 GenerateDeclarationCommon(prop);
                 GenerateProperty(prop);
             }
-            PopIndent();
+            Unindent();
         }
 
         public void GenerateIndexer(Property property)
@@ -636,7 +634,7 @@ namespace CppSharp.Generators.CLI
             var indexParameterType = indexParameter.QualifiedType.Visit(TypePrinter);
 
             WriteLine("property {0} default[{1}]", type, indexParameterType);
-            WriteStartBraceIndent();
+            WriteOpenBraceAndIndent();
 
             if (property.HasGetter)
                 WriteLine("{0} get({1} {2});", type, indexParameterType, indexParameter.Name);
@@ -644,7 +642,7 @@ namespace CppSharp.Generators.CLI
             if (property.HasSetter)
                 WriteLine("void set({1} {2}, {0} value);", type, indexParameterType, indexParameter.Name);
 
-            WriteCloseBraceIndent();
+            UnindentAndWriteCloseBrace();
         }
 
         public void GenerateProperty(Property property)
@@ -665,7 +663,7 @@ namespace CppSharp.Generators.CLI
             else
             {
                 WriteLine("property {0} {1}", type, property.Name);
-                WriteStartBraceIndent();
+                WriteOpenBraceAndIndent();
 
                 if (property.HasGetter)
                     WriteLine("{0} get();", type);
@@ -673,7 +671,7 @@ namespace CppSharp.Generators.CLI
                 if (property.HasSetter)
                     WriteLine("void set({0});", type);
 
-                WriteCloseBraceIndent();
+                UnindentAndWriteCloseBrace();
             }
 
             PopBlock(NewLineKind.BeforeNextBlock);
@@ -835,11 +833,11 @@ namespace CppSharp.Generators.CLI
                 Write(" : {0}", typeName);
 
             NewLine();
-            WriteStartBraceIndent();
+            WriteOpenBraceAndIndent();
 
             GenerateEnumItems(@enum);
 
-            PopIndent();
+            Unindent();
             WriteLine("};");
 
             PopBlock(NewLineKind.BeforeNextBlock);

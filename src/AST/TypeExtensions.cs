@@ -349,14 +349,35 @@
         public static bool IsConstRefToPrimitive(this QualifiedType type)
         {
             Type desugared = type.Type.Desugar();
+            Type pointee = desugared.GetFinalPointee().Desugar();
+            pointee = (pointee.GetFinalPointee() ?? pointee).Desugar();
             return desugared.IsReference() &&
-                desugared.GetFinalPointee().Desugar().IsPrimitiveType() && type.IsConst();
+                (pointee.IsPrimitiveType() || pointee.IsEnum()) && type.IsConst();
         }
 
         private static bool IsConst(this QualifiedType type)
         {
             return type.Type != null && (type.Qualifiers.IsConst ||
                 type.Type.GetQualifiedPointee().IsConst());
+        }
+
+        public static QualifiedType StripConst(this QualifiedType type)
+        {
+            var qualifiers = type.Qualifiers;
+            qualifiers.IsConst = false;
+            type.Qualifiers = qualifiers;
+
+            var ptr = type.Type as PointerType;
+            if (ptr != null)
+            {
+                var pointee = ptr.QualifiedPointee;
+                var pointeeQualifiers = pointee.Qualifiers;
+                pointeeQualifiers.IsConst = false;
+                pointee.Qualifiers = pointeeQualifiers;
+                ptr.QualifiedPointee = pointee;
+            }
+
+            return type;
         }
 
         public static bool IsConstCharString(this Type type)

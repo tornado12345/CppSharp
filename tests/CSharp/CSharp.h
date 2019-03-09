@@ -1,15 +1,25 @@
+#pragma once
+
 #include "../Tests.h"
 #include <cstdint>
 #include <vector>
 #include <limits>
 #include <string>
 #include "AnotherUnit.h"
+#include "CSharpTemplates.h"
+
+class DLL_API QString
+{
+};
 
 class DLL_API Foo
 {
 public:
+    Foo(const QString& name);
     Foo(const char* name = 0);
     Foo(int a, int p = 0);
+    Foo(char16_t ch);
+    Foo(wchar_t ch);
     int method();
     int operator[](int i) const;
     int operator[](unsigned int i);
@@ -23,6 +33,7 @@ public:
     void takesStdVector(const std::vector<int>& vector);
     int width();
     void set_width(int value);
+    const int& returnConstRef();
 
     static const int rename = 5;
     static int makeFunctionCall();
@@ -33,6 +44,7 @@ public:
     int operator --();
 
     bool btest[5];
+    QFlags<TestFlag> publicFieldMappedToEnum;
 
 protected:
     int P;
@@ -46,8 +58,14 @@ public:
     Quux(int i);
     Quux(char c);
     Quux(Foo f);
+    ~Quux();
+
+    Foo* setterWithDefaultOverload();
+    void setSetterWithDefaultOverload(Foo* value = new Foo());
+
 private:
     int priv;
+    Foo* _setterWithDefaultOverload;
 };
 
 class Bar;
@@ -184,46 +202,12 @@ private:
 
 Proprietor::Proprietor() : _items(Bar::Items::Item1), _itemsByValue(Bar::Items::Item1) {}
 
-template <typename T>
-class DLL_API QFlags
-{
-    typedef int Int;
-    typedef int (*Zero);
-public:
-    QFlags(T t);
-    QFlags(Zero = 0);
-    operator Int();
-private:
-    int flag;
-};
-
-template <typename T>
-QFlags<T>::QFlags(T t) : flag(Int(t))
-{
-}
-
-template <typename T>
-QFlags<T>::QFlags(Zero) : flag(Int(0))
-{
-}
-
-template <typename T>
-QFlags<T>::operator Int()
-{
-    return flag;
-}
-
-enum class TestFlag
-{
-    Flag1,
-    Flag2
-};
-
 class DLL_API ComplexType
 {
 public:
     ComplexType();
     ComplexType(const QFlags<TestFlag> f);
+    ComplexType(const HasCtorWithMappedToEnum<TestFlag> f);
     int check();
     QFlags<TestFlag> returnsQFlags();
     void takesQFlags(const QFlags<int> f);
@@ -298,6 +282,14 @@ enum class Flags
     Flag3 = 4
 };
 
+class DLL_API UsesPointerToEnum
+{
+public:
+    UsesPointerToEnum();
+    Flags* _flags;
+    void hasPointerToEnumInParam(Flags* flag);
+};
+
 class DLL_API UsesPointerToEnumInParamOfVirtual
 {
 public:
@@ -322,7 +314,7 @@ UntypedFlags operator|(UntypedFlags lhs, UntypedFlags rhs);
 struct DLL_API QGenericArgument
 {
 public:
-    QGenericArgument(const char* name = 0);
+    QGenericArgument(const char* name = 0, const void *data = 0);
     void* fixedArrayInValueType[1];
 private:
     const char* _name;
@@ -387,6 +379,10 @@ public:
     DefaultZeroMappedToEnum(int* = 0);
 };
 
+enum class Empty : unsigned long long int
+{
+};
+
 class DLL_API MethodsWithDefaultValues : public Quux
 {
 public:
@@ -405,11 +401,14 @@ public:
     MethodsWithDefaultValues(float a, Zero b = 0);
     MethodsWithDefaultValues(double d, QList<QColor> list = QList<QColor>());
     MethodsWithDefaultValues(QRect* pointer, float f = 1, int i = std::numeric_limits<double>::infinity());
-    void defaultPointer(Foo* ptr = 0);
+    ~MethodsWithDefaultValues();
+    void defaultPointer(Foo* ptr1 = 0, Foo* ptr2 = nullptr);
     void defaultVoidStar(void* ptr = 0);
+    void defaultFunctionPointer(void(*functionPtr)(int p) = nullptr);
     void defaultValueType(QGenericArgument valueType = QGenericArgument());
     void defaultChar(char c = 'a');
     void defaultEmptyChar(char c = 0);
+    void defaultEmptyEnum(Empty e = Empty(-1));
     void defaultRefTypeBeforeOthers(Foo foo = Foo(), int i = 5, Bar::Items item = Bar::Item2);
     void defaultRefTypeAfterOthers(int i = 5, Bar::Items item = Bar::Item2, Foo foo = Foo());
     void defaultRefTypeBeforeAndAfterOthers(int i = 5, Foo foo = Foo(), Bar::Items item = Bar::Item2, Baz baz = Baz());
@@ -440,6 +439,7 @@ public:
     void defaultDoubleWithoutF(double d1 = 1.0, double d2 = 1.);
     void defaultIntExpressionWithEnum(int i = Qt::GlobalColor::black + 1);
     void defaultCtorWithMoreThanOneArg(QMargins m = QMargins(0, 0, 0, 0));
+    void defaultEmptyBraces(Foo foo = {});
     void defaultWithComplexArgs(const QRect& rectangle = QRect(QPoint(0, 0), QSize(-1, -1)));
     void defaultWithRefManagedLong(long long* i = 0);
     void defaultWithFunctionCall(int f = Foo::makeFunctionCall());
@@ -455,6 +455,12 @@ public:
     int getA();
 private:
     Foo m_foo;
+};
+
+class DLL_API HasPureVirtualWithDefaultArg
+{
+public:
+    virtual void pureVirtualWithDefaultArg(Foo* foo = nullptr) = 0;
 };
 
 class DLL_API HasOverridesWithChangedAccessBase
@@ -674,32 +680,6 @@ protected:
         int i;
         double d;
     } u;
-};
-
-class DLL_API SecondaryBase
-{
-public:
-    enum Property
-    {
-        P1,
-        P2
-    };
-    enum Function
-    {
-        M1,
-        M2
-    };
-
-    virtual void VirtualMember();
-    int property();
-    void setProperty(int value);
-    void function(bool* ok = 0);
-    typedef void HasPointerToEnum(Property* pointerToEnum);
-    HasPointerToEnum* hasPointerToEnum;
-protected:
-    void protectedFunction();
-    int protectedProperty();
-    void setProtectedProperty(int value);
 };
 
 class DLL_API TestOverrideFromSecondaryBase : public Foo, public SecondaryBase
@@ -1293,3 +1273,31 @@ struct DLL_API CSharp
 };
 
 static int FOOBAR_CONSTANT = 42;
+
+
+
+class DLL_API SimpleInterface
+{
+public:
+    SimpleInterface();
+    ~SimpleInterface();
+    virtual int size() const = 0;
+    virtual int capacity() const = 0;
+    virtual void* get(int n) = 0;
+};
+
+class DLL_API InterfaceTester
+{
+public:
+    InterfaceTester();
+    ~InterfaceTester();
+    int capacity();
+    int size();
+    void* get(int n);
+    void setInterface(SimpleInterface* i);
+private:
+    SimpleInterface* interface;
+};
+
+DLL_API void va_listFunction(va_list v);
+DLL_API char* returnCharPointer();

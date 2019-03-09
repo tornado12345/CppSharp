@@ -170,14 +170,12 @@ namespace CppSharp.Passes
             declarations.AddRange(decl.Namespace.Classes.Where(c => !c.IsIncomplete));
             declarations.AddRange(decl.Namespace.Enums);
             declarations.AddRange(decl.Namespace.Events);
+            declarations.Add(decl.Namespace);
 
             var function = decl as Function;
             if (function != null)
-            {
-                declarations.Add(function.Namespace);
                 // account for overloads
                 declarations.AddRange(GetFunctionsWithTheSameParams(function));
-            }
             else
                 declarations.AddRange(decl.Namespace.Functions);
 
@@ -343,7 +341,7 @@ namespace CppSharp.Passes
         /// <param name="decl"></param>
         /// <param name="pattern">The cases.</param>
         /// <returns>string</returns>
-        static string ConvertCaseString(Declaration decl, RenameCasePattern pattern)
+        public static string ConvertCaseString(Declaration decl, RenameCasePattern pattern)
         {
             if (decl.Name.All(c => !char.IsLetter(c)))
                 return decl.Name;
@@ -362,17 +360,7 @@ namespace CppSharp.Passes
             if (sb[0] == '@')
                 sb.Remove(0, 1);
 
-            for (int i = sb.Length - 1; i >= 0; i--)
-            {
-                // ensure separation by not ending up with more capitals or digits in a row than before
-                if (sb[i] != '_' || (i > 0 && (char.IsUpper(sb[i - 1]) ||
-                    (i < sb.Length - 1 && char.IsDigit(sb[i + 1]) && char.IsDigit(sb[i - 1])))))
-                    continue;
-
-                if (i < sb.Length - 1)
-                    sb[i + 1] = char.ToUpperInvariant(sb[i + 1]);
-                sb.Remove(i, 1);
-            }
+            RemoveUnderscores(sb);
 
             var @class = decl as Class;
             switch (pattern)
@@ -392,6 +380,24 @@ namespace CppSharp.Passes
             }
 
             return sb.ToString();
+        }
+
+        private static void RemoveUnderscores(StringBuilder sb)
+        {
+            for (int i = sb.Length - 1; i >= 0; i--)
+            {
+                if (sb[i] != '_' ||
+                    // lower case intentional if the first character is already upper case
+                    (i + 1 < sb.Length && char.IsLower(sb[i + 1]) && char.IsUpper(sb[0])) ||
+                    // don't end up with more capitals or digits in a row than before
+                    (i > 0 && (char.IsUpper(sb[i - 1]) ||
+                     (i < sb.Length - 1 && char.IsDigit(sb[i + 1]) && char.IsDigit(sb[i - 1])))))
+                    continue;
+
+                if (i < sb.Length - 1)
+                    sb[i + 1] = char.ToUpperInvariant(sb[i + 1]);
+                sb.Remove(i, 1);
+            }
         }
     }
 
