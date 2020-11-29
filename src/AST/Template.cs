@@ -310,7 +310,7 @@ namespace CppSharp.AST
         public override string ToString()
         {
             var args = string.Join(", ", Arguments.Select(a => a.ToString()));
-            return string.Format("{0}<{1}> [{2}]", OriginalName, args, SpecializationKind);
+            return $"{OriginalName}<{args}> [{SpecializationKind}]";
         }
     }
 
@@ -437,5 +437,18 @@ namespace CppSharp.AST
     /// </summary>
     public class VarTemplatePartialSpecialization : VarTemplateSpecialization
     {
+    }
+
+    /// <summary>
+    /// Represents a dependent using declaration which was marked with typename.
+    /// </summary>
+    public class UnresolvedUsingTypename : Declaration
+    {
+        //public TypeAliasTemplate DescribedAliasTemplate { get; set; }
+
+        public override T Visit<T>(IDeclVisitor<T> visitor)
+        {
+            return visitor.VisitUnresolvedUsingDecl(this);
+        }
     }
 }

@@ -9,14 +9,10 @@ namespace CppSharp.Passes
 {
     public class DelegatesPass : TranslationUnitPass
     {
-        public DelegatesPass()
-        {
-            VisitOptions.VisitClassBases = false;
-            VisitOptions.VisitFunctionReturnType = false;
-            VisitOptions.VisitNamespaceEnums = false;
-            VisitOptions.VisitNamespaceTemplates = false;
-            VisitOptions.VisitTemplateArguments = false;
-        }
+        public DelegatesPass() => VisitOptions.ClearFlags(
+            VisitFlags.ClassBases | VisitFlags.FunctionReturnType |
+            VisitFlags.NamespaceEnums | VisitFlags.NamespaceTemplates |
+            VisitFlags.TemplateArguments);
 
         public override bool VisitASTContext(ASTContext context)
         {
@@ -46,12 +42,40 @@ namespace CppSharp.Passes
             return base.VisitClassDecl(@class);
         }
 
+        public override bool VisitClassTemplateSpecializationDecl(ClassTemplateSpecialization specialization)
+        {
+            if (!base.VisitClassTemplateSpecializationDecl(specialization) ||
+                !specialization.IsGenerated || !specialization.TemplatedDecl.TemplatedDecl.IsGenerated)
+                return false;
+
+            foreach (TemplateArgument arg in specialization.Arguments.Where(
+                a => a.Kind == TemplateArgument.ArgumentKind.Type))
+            {
+                arg.Type = CheckForDelegate(arg.Type, specialization);
+            }
+
+            return true;
+        }
+
         public override bool VisitMethodDecl(Method method)
         {
             if (!base.VisitMethodDecl(method) || !method.IsVirtual || method.Ignore)
                 return false;
 
-            method.FunctionType = CheckForDelegate(method.FunctionType, method);
+            var functionType = new FunctionType
+                {
+                    CallingConvention = method.CallingConvention,
+                    IsDependent = method.IsDependent,
+                    ReturnType = method.ReturnType
+                };
+
+            TypePrinter.PushMarshalKind(MarshalKind.VTableReturnValue);
+            functionType.Parameters.AddRange(
+                method.GatherInternalParams(Context.ParserOptions.IsItaniumLikeAbi, true));
+
+            method.FunctionType = CheckForDelegate(new QualifiedType(functionType),
+                method.Namespace, @private: true);
+            TypePrinter.PopMarshalKind();
 
             return true;
         }
@@ -61,22 +85,55 @@ namespace CppSharp.Passes
             if (!base.VisitFunctionDecl(function) || function.Ignore)
                 return false;
 
-            function.ReturnType = CheckForDelegate(function.ReturnType, function);
+            function.ReturnType = CheckForDelegate(function.ReturnType,
+                function.Namespace);
             return true;
         }
 
         public override bool VisitParameterDecl(Parameter parameter)
         {
+            if(parameter.Namespace?.TranslationUnit?.Module == null && namespaces.Count > 0)
+                parameter.Namespace = namespaces.Peek();
+
             if (!base.VisitDeclaration(parameter) || parameter.Namespace == null ||
                 parameter.Namespace.Ignore)
                 return false;
 
-            parameter.QualifiedType = CheckForDelegate(parameter.QualifiedType, parameter);
+            parameter.QualifiedType = CheckForDelegate(parameter.QualifiedType,
+                parameter.Namespace);
 
             return true;
         }
 
-        private QualifiedType CheckForDelegate(QualifiedType type, ITypedDecl decl)
+        public override bool VisitProperty(Property property)
+        {
+            if (!base.VisitProperty(property))
+                return false;
+
+            property.QualifiedType = CheckForDelegate(property.QualifiedType,
+                property.Namespace);
+
+            return true;
+        }
+
+        public override bool VisitFieldDecl(Field field)
+        {
+            if (field.Namespace?.TranslationUnit?.Module != null)
+                namespaces.Push(field.Namespace);
+
+            if (!base.VisitFieldDecl(field))
+                return false;
+
+            field.QualifiedType = CheckForDelegate(field.QualifiedType,
+                field.Namespace);
+
+            namespaces.Clear();
+
+            return true;
+        }
+
+        private QualifiedType CheckForDelegate(QualifiedType type,
+            DeclarationContext declarationContext, bool @private = false)
         {
             if (type.Type is TypedefType)
                 return type;
@@ -89,22 +146,21 @@ namespace CppSharp.Passes
             if (pointee is TypedefType)
                 return type;
 
-            var functionType = pointee.Desugar() as FunctionType;
-            if (functionType == null)
+            desugared = pointee.Desugar();
+            FunctionType functionType = desugared as FunctionType;
+            if (functionType == null && !desugared.IsPointerTo(out functionType))
                 return type;
 
-            TypedefDecl @delegate = GetDelegate(type, decl);
+            TypedefDecl @delegate = GetDelegate(functionType, declarationContext, @private);
             return new QualifiedType(new TypedefType { Declaration = @delegate });
         }
 
-        private TypedefDecl GetDelegate(QualifiedType type, ITypedDecl typedDecl)
+        private TypedefDecl GetDelegate(FunctionType functionType,
+            DeclarationContext declarationContext, bool @private = false)
         {
-            FunctionType newFunctionType = GetNewFunctionType(typedDecl, type);
-
-            var delegateName = GetDelegateName(newFunctionType);
-            var access = typedDecl is Method ? AccessSpecifier.Private : AccessSpecifier.Public;
-            var decl = (Declaration) typedDecl;
-            Module module = decl.TranslationUnit.Module;
+            var delegateName = GetDelegateName(functionType);
+            var access = @private ? AccessSpecifier.Private : AccessSpecifier.Public;
+            Module module = declarationContext.TranslationUnit.Module;
             var existingDelegate = delegates.Find(t => Match(t, delegateName, module));
             if (existingDelegate != null)
             {
@@ -115,18 +171,18 @@ namespace CppSharp.Passes
 
                 // Check if there is an existing delegate with a different calling convention
                 if (((FunctionType) existingDelegate.Type.GetPointee()).CallingConvention ==
-                    newFunctionType.CallingConvention)
+                    functionType.CallingConvention)
                     return existingDelegate;
 
                 // Add a new delegate with the calling convention appended to its name
-                delegateName += '_' + newFunctionType.CallingConvention.ToString();
+                delegateName += '_' + functionType.CallingConvention.ToString();
                 existingDelegate = delegates.Find(t => Match(t, delegateName, module));
                 if (existingDelegate != null)
                     return existingDelegate;
             }
 
-            var namespaceDelegates = GetDeclContextForDelegates(decl.Namespace);
-            var delegateType = new QualifiedType(new PointerType(new QualifiedType(newFunctionType)));
+            var namespaceDelegates = GetDeclContextForDelegates(declarationContext);
+            var delegateType = new QualifiedType(new PointerType(new QualifiedType(functionType)));
             existingDelegate = new TypedefDecl
                 {
                     Access = access,
@@ -138,30 +194,6 @@ namespace CppSharp.Passes
             delegates.Add(existingDelegate);
 
             return existingDelegate;
-        }
-
-        private FunctionType GetNewFunctionType(ITypedDecl decl, QualifiedType type)
-        {
-            var functionType = new FunctionType();
-            var method = decl as Method;
-            if (method != null && method.FunctionType == type)
-            {
-                functionType.Parameters.AddRange(
-                    method.GatherInternalParams(Context.ParserOptions.IsItaniumLikeAbi, true));
-                functionType.CallingConvention = method.CallingConvention;
-                functionType.IsDependent = method.IsDependent;
-                functionType.ReturnType = method.ReturnType;
-            }
-            else
-            {
-                var funcTypeParam = (FunctionType) decl.Type.Desugar().GetFinalPointee().Desugar();
-                functionType = new FunctionType(funcTypeParam);
-            }
-
-            for (int i = 0; i < functionType.Parameters.Count; i++)
-                functionType.Parameters[i].Name = $"_{i}";
-
-            return functionType;
         }
 
         private static bool Match(TypedefDecl t, string delegateName, Module module)
@@ -242,7 +274,7 @@ namespace CppSharp.Passes
         {
             // TODO: all of this needs proper general fixing by only leaving type names
             return types.Replace("global::System.", string.Empty)
-                .Replace("[MarshalAs(UnmanagedType.LPStr)] ", string.Empty)
+                .Replace("[MarshalAs(UnmanagedType.LPUTF8Str)] ", string.Empty)
                 .Replace("[MarshalAs(UnmanagedType.LPWStr)] ", string.Empty)
                 .Replace("global::", string.Empty).Replace("*", "Ptr")
                 .Replace('.', '_').Replace(' ', '_').Replace("::", "_")
@@ -271,5 +303,6 @@ namespace CppSharp.Passes
         /// iterating over it, so we collect all the typedefs and add them at the end.
         /// </summary>
         private readonly List<TypedefDecl> delegates = new List<TypedefDecl>();
+        private readonly Stack<DeclarationContext> namespaces = new Stack<DeclarationContext>();
     }
 }

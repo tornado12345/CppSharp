@@ -7,11 +7,14 @@ namespace CppSharp.Passes
     /// <summary>
     /// This pass generates internal classes that implement abstract classes.
     /// When the return type of a function is abstract, these internal
-    /// classes provide since the real type cannot be resolved while binding
-    /// an allocatable class that supports proper polymorphism.
+    /// classes are used instead since the real type cannot be resolved 
+    /// while binding an allocatable class that supports proper polymorphism.
     /// </summary>
     public class GenerateAbstractImplementationsPass : TranslationUnitPass
     {
+        public GenerateAbstractImplementationsPass()
+            => VisitOptions.ResetFlags(VisitFlags.Default);
+
         /// <summary>
         /// Collects all internal implementations in a unit to be added at
         /// the end because the unit cannot be changed while it's being
@@ -40,7 +43,7 @@ namespace CppSharp.Passes
             if (@class.CompleteDeclaration != null)
                 return VisitClassDecl(@class.CompleteDeclaration as Class);
 
-            if (@class.IsAbstract)
+            if (@class.IsAbstract && (!@class.IsTemplate || Options.GenerateClassTemplates))
             {
                 foreach (var ctor in from ctor in @class.Constructors
                                      where ctor.Access == AccessSpecifier.Public
@@ -52,7 +55,7 @@ namespace CppSharp.Passes
             return @class.IsAbstract;
         }
 
-        private static Class AddInternalImplementation(Class @class)
+        private static T AddInternalImplementation<T>(T @class) where T : Class, new()
         {
             var internalImpl = GetInternalImpl(@class);
 
@@ -77,14 +80,26 @@ namespace CppSharp.Passes
             return internalImpl;
         }
 
-        private static Class GetInternalImpl(Declaration @class)
+        private static T GetInternalImpl<T>(T @class) where T : Class, new()
         {
-            var internalImpl = new Class
+            var internalImpl = new T
                                 {
                                     Name = @class.Name + "Internal",
                                     Access = AccessSpecifier.Private,
                                     Namespace = @class.Namespace
                                 };
+            if (@class.IsDependent)
+            {
+                internalImpl.IsDependent = true;
+                internalImpl.TemplateParameters.AddRange(@class.TemplateParameters);
+                foreach (var specialization in @class.Specializations)
+                {
+                    var specializationImpl = AddInternalImplementation(specialization);
+                    specializationImpl.Arguments.AddRange(specialization.Arguments);
+                    specializationImpl.TemplatedDecl = specialization.TemplatedDecl;
+                    internalImpl.Specializations.Add(specializationImpl);
+                }
+            }
 
             var @base = new BaseClassSpecifier { Type = new TagType(@class) };
             internalImpl.Bases.Add(@base);
@@ -94,7 +109,7 @@ namespace CppSharp.Passes
 
         private static IEnumerable<Method> GetRelevantAbstractMethods(Class @class)
         {
-            var abstractMethods = GetAbstractMethods(@class);
+            var abstractMethods = @class.GetAbstractMethods();
             var overriddenMethods = GetOverriddenMethods(@class);
 
             for (var i = abstractMethods.Count - 1; i >= 0; i--)
@@ -124,21 +139,6 @@ namespace CppSharp.Passes
                         abstractMethods.RemoveAt(i);
                     }
                 }
-            }
-
-            return abstractMethods;
-        }
-
-        private static List<Method> GetAbstractMethods(Class @class)
-        {
-            var abstractMethods = @class.Methods.Where(m => m.IsPure).ToList();
-            var abstractOverrides = abstractMethods.Where(a => a.IsOverride).ToList();
-            foreach (var baseAbstractMethods in @class.Bases.Select(b => GetAbstractMethods(b.Class)))
-            {
-                for (var i = baseAbstractMethods.Count - 1; i >= 0; i--)
-                    if (abstractOverrides.Any(a => a.CanOverride(baseAbstractMethods[i])))
-                        baseAbstractMethods.RemoveAt(i);
-                abstractMethods.AddRange(baseAbstractMethods);
             }
 
             return abstractMethods;

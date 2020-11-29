@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using SourceLocation = CppSharp.AST.SourceLocation;
 using CppSharp.Parser.AST;
+using CppSharp.AST.Extensions;
 
 namespace CppSharp
 {
@@ -29,6 +30,7 @@ namespace CppSharp
         public abstract TRet VisitBuiltin(BuiltinType type);
         public abstract TRet VisitPackExpansion(PackExpansionType type);
         public abstract TRet VisitUnaryTransform(UnaryTransformType type);
+        public abstract TRet VisitUnresolvedUsing(UnresolvedUsingType type);
         public abstract TRet VisitVector(VectorType type);
 
         public TRet Visit(Parser.AST.Type type)
@@ -123,6 +125,11 @@ namespace CppSharp
                     var _type = UnaryTransformType.__CreateInstance(type.__Instance);
                     return VisitUnaryTransform(_type);
                 }
+                case TypeKind.UnresolvedUsing:
+                {
+                    var _type = UnresolvedUsingType.__CreateInstance(type.__Instance);
+                    return VisitUnresolvedUsing(_type);
+                }
                 case TypeKind.Vector:
                 {
                     var _type = VectorType.__CreateInstance(type.__Instance);
@@ -168,7 +175,8 @@ namespace CppSharp
         public abstract TRet VisitTemplateTemplateParameter(TemplateTemplateParameter decl);
         public abstract TRet VisitTypeTemplateParameter(TypeTemplateParameter decl);
         public abstract TRet VisitNonTypeTemplateParameter(NonTypeTemplateParameter decl);
-
+        public abstract TRet VisitUnresolvedUsingTypename(UnresolvedUsingTypename decl);
+        
         public virtual TRet Visit(Parser.AST.Declaration decl)
         {
             switch (decl.Kind)
@@ -297,6 +305,11 @@ namespace CppSharp
                     {
                         var _decl = NonTypeTemplateParameter.__CreateInstance(decl.__Instance);
                         return VisitNonTypeTemplateParameter(_decl);
+                    }
+                case DeclarationKind.UnresolvedUsingTypename:
+                    {
+                        var _decl = UnresolvedUsingTypename.__CreateInstance(decl.__Instance);
+                        return VisitUnresolvedUsingTypename(_decl);
                     }
             }
 
@@ -810,6 +823,15 @@ namespace CppSharp
             return _type;
         }
 
+        public override AST.Type VisitUnresolvedUsing(UnresolvedUsingType type)
+        {
+            var _type = new AST.UnresolvedUsingType();
+            VisitType(type, _type);
+            _type.Declaration = (AST.UnresolvedUsingTypename)
+                declConverter.Visit(type.Declaration);
+            return _type;
+        }
+
         public override AST.Type VisitVector(VectorType type)
         {
             var _type = new AST.VectorType();
@@ -963,7 +985,9 @@ namespace CppSharp
             _decl.IsImplicit = decl.IsImplicit;
             _decl.IsInvalid = decl.IsInvalid;
             _decl.DefinitionOrder = decl.DefinitionOrder;
+            _decl.AlignAs = decl.AlignAs;
             _decl.MaxFieldAlignment = decl.MaxFieldAlignment;
+            _decl.IsDeprecated = decl.IsDeprecated;
 
             if (decl.CompleteDeclaration != null)
                 _decl.CompleteDeclaration = Visit(decl.CompleteDeclaration);
@@ -1477,9 +1501,11 @@ namespace CppSharp
         public void VisitVariable(Variable decl, AST.Variable _variable)
         {
             VisitDeclaration(decl, _variable);
+            _variable.IsConstExpr = decl.IsConstExpr;
             _variable.Mangled = decl.Mangled;
             _variable.QualifiedType = typeConverter.VisitQualified(
                 decl.QualifiedType);
+            _variable.Initializer = VisitStatement(decl.Initializer);
         }
 
         public override AST.Declaration VisitVariable(Variable decl)
@@ -1566,7 +1592,15 @@ namespace CppSharp
             _class.IsInjected = @class.IsInjected;
 
             if (@class.Layout != null)
+            {
                 _class.Layout = VisitClassLayout(@class.Layout);
+                if (_class.BaseClass != null)
+                {
+                    AST.LayoutBase @base = _class.Layout.Bases.Find(
+                        b => b.Class == _class.BaseClass);
+                    _class.BaseClass.Layout.HasSubclassAtNonZeroOffset = @base.Offset > 0;
+                }
+            }
         }
 
         public override AST.Declaration VisitClass(Class @class)
@@ -1577,11 +1611,27 @@ namespace CppSharp
             return _class;
         }
 
+        AST.RecordArgABI VisitRecordArgABI(RecordArgABI argAbi)
+        {
+            switch (argAbi)
+            {
+            case RecordArgABI.Default:
+                return AST.RecordArgABI.Default;
+            case RecordArgABI.DirectInMemory:
+                return AST.RecordArgABI.DirectInMemory;
+            case RecordArgABI.Indirect:
+                return AST.RecordArgABI.Indirect;
+            }
+
+            throw new NotImplementedException();
+        }
+
         AST.ClassLayout VisitClassLayout(ClassLayout layout)
         {
             var _layout = new AST.ClassLayout
             {
                 ABI = VisitCppAbi(layout.ABI),
+                ArgABI = VisitRecordArgABI(layout.ArgABI),
                 Layout = VisitVTableLayout(layout.Layout),
                 HasOwnVFPtr = layout.HasOwnVFPtr,
                 VBPtrOffset = layout.VBPtrOffset,
@@ -2008,6 +2058,13 @@ namespace CppSharp
             templateTemplateParameter.IsExpandedParameterPack = decl.IsExpandedParameterPack;
             return templateTemplateParameter;
         }
+
+        public override AST.Declaration VisitUnresolvedUsingTypename(UnresolvedUsingTypename decl)
+        {
+            var unresolvedUsingTypename = new AST.UnresolvedUsingTypename();
+            VisitDeclaration(decl, unresolvedUsingTypename);
+            return unresolvedUsingTypename;
+        }
     }
 
     public unsafe class CommentConverter : CommentsVisitor<AST.Comment>
@@ -2120,6 +2177,24 @@ namespace CppSharp
             var inlineCommandComment = new AST.InlineCommandComment();
             inlineCommandComment.HasTrailingNewline = comment.HasTrailingNewline;
             inlineCommandComment.CommandId = comment.CommandId;
+            switch (comment.CommentRenderKind)
+            {
+                case InlineCommandComment.RenderKind.RenderNormal:
+                    inlineCommandComment.CommentRenderKind = AST.InlineCommandComment.RenderKind.RenderNormal;
+                    break;
+                case InlineCommandComment.RenderKind.RenderBold:
+                    inlineCommandComment.CommentRenderKind = AST.InlineCommandComment.RenderKind.RenderBold;
+                    break;
+                case InlineCommandComment.RenderKind.RenderMonospaced:
+                    inlineCommandComment.CommentRenderKind = AST.InlineCommandComment.RenderKind.RenderMonospaced;
+                    break;
+                case InlineCommandComment.RenderKind.RenderEmphasized:
+                    inlineCommandComment.CommentRenderKind = AST.InlineCommandComment.RenderKind.RenderEmphasized;
+                    break;
+                case InlineCommandComment.RenderKind.RenderAnchor:
+                    inlineCommandComment.CommentRenderKind = AST.InlineCommandComment.RenderKind.RenderAnchor;
+                    break;
+            }
             for (uint i = 0; i < comment.ArgumentsCount; i++)
             {
                 var argument = new AST.InlineCommandComment.Argument { Text = comment.GetArguments(i).Text };

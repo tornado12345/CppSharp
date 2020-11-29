@@ -16,50 +16,95 @@ namespace CppSharp.Passes
         public SymbolsCodeGenerator(BindingContext context, IEnumerable<TranslationUnit> units)
             : base(context, units)
         {
+            cppTypePrinter = new CppTypePrinter(Context)
+            {
+                ScopeKind = TypePrintScopeKind.Qualified,
+                ResolveTypedefs = true,
+                ResolveTypeMaps = false
+            };
+
+            cppTypePrinter.PushContext(TypePrinterContextKind.Native);
         }
 
         public override void Process()
         {
-            WriteLine("#define _LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS");
-            NewLine();
-
             if (TranslationUnit.Module == Options.SystemModule)
+            {
+                WriteLine("#define _LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS");
+                WriteLine("#define _LIBCPP_HIDE_FROM_ABI");
+                NewLine();
                 WriteLine("#include <string>");
+            }
             else
                 foreach (var header in TranslationUnit.Module.Headers)
                     WriteLine($"#include <{header}>");
+            WriteLine("#include <new>");
             NewLine();
-        }
-
-        public override bool VisitClassTemplateSpecializationDecl(ClassTemplateSpecialization specialization)
-        {
-            WriteLine($"template class {GetExporting()}{specialization.Visit(cppTypePrinter)};");
-            return true;
         }
 
         public override bool VisitMethodDecl(Method method)
         {
-            if (method.Namespace is ClassTemplateSpecialization)
+            if (method.IsDestructor &&
+                (!((Class) method.Namespace).HasNonTrivialDestructor ||
+                 method.Access == AccessSpecifier.Private))
+                return false;
+
+            if (method.Namespace is ClassTemplateSpecialization &&
+                (method.TranslationUnit.IsSystemHeader ||
+                 (!method.IsImplicit && !method.IsDefaulted && !method.IsPure &&
+                  string.IsNullOrEmpty(method.Body))))
             {
                 WriteLine($"template {GetExporting()}{method.Visit(cppTypePrinter)};");
                 return true;
             }
+
+            Class @class = (Class) method.Namespace;
+            bool needSubclass = method.Access == AccessSpecifier.Protected ||
+                @class.IsAbstract;
+            string wrapper = GetWrapper(method);
+            int i = 0;
+            foreach (var param in method.Parameters.Where(
+                p => string.IsNullOrEmpty(p.OriginalName)))
+                param.Name = "_" + i++;
+            var @params = string.Join(", ", method.Parameters.Select(CastIfRVReference));
+            if (needSubclass)
+            {
+                string className = @class.Visit(cppTypePrinter);
+                Write($"class {wrapper}{method.Namespace.Name} : public {className} {{ public: ");
+                Write(wrapper + method.Namespace.Name);
+                Write($@"({string.Join(", ", method.Parameters.Select(
+                    p => cppTypePrinter.VisitParameter(p)))})");
+                Write($": {className}({@params}) {{}}; ");
+
+                ImplementIfAbstract(@class);
+            }
             if (method.IsConstructor)
             {
-                WrapConstructor(method);
+                WrapConstructor(method, wrapper, @params);
                 return true;
             }
             if (method.IsDestructor)
             {
-                WrapDestructor(method);
+                WrapDestructor(method, wrapper);
                 return true;
             }
-            return this.VisitFunctionDecl(method);
+            TakeFunctionAddress(method, wrapper);
+            return true;
         }
 
         public override bool VisitFunctionDecl(Function function)
         {
-            TakeFunctionAddress(function);
+            TakeFunctionAddress(function, GetWrapper(function));
+            return true;
+        }
+
+        public override bool VisitVariableDecl(Variable variable)
+        {
+            if (!(variable.Namespace is ClassTemplateSpecialization specialization) ||
+                specialization.SpecializationKind == TemplateSpecializationKind.ExplicitSpecialization)
+                return false;
+
+            WriteLine($"template {GetExporting()}{variable.Visit(cppTypePrinter)};");
             return true;
         }
 
@@ -69,23 +114,31 @@ namespace CppSharp.Passes
                 "__declspec(dllexport) " : string.Empty;
         }
 
-        private string GetWrapper(Module module)
+        private string GetWrapper(Function function)
         {
-            var symbolsLibraryName = new StringBuilder(module.SymbolsLibraryName);
-            for (int i = 0; i < symbolsLibraryName.Length; i++)
-                if (!char.IsLetterOrDigit(symbolsLibraryName[i]))
-                    symbolsLibraryName[i] = '_';
-            return $"{symbolsLibraryName}{++functionCount}";
+            if (function is Method method && (method.IsConstructor || method.IsDestructor))
+            {
+                var nameBuilder = new StringBuilder(method.USR);
+                for (int i = 0; i < nameBuilder.Length; i++)
+                    if (!char.IsLetterOrDigit(nameBuilder[i]) &&
+                        nameBuilder[i] != '_')
+                    {
+                        if (nameBuilder[i] == '&')
+                            nameBuilder.Insert(i + 1, '_');
+                        nameBuilder[i] = '_';
+                    }
+                string @class = function.Namespace.Name;
+                nameBuilder.Replace("c__S_", string.Empty).Replace(
+                    $"{@class}_F_", $"{@class}_").TrimUnderscores();
+                if (function.IsOperator)
+                    nameBuilder.Append(function.OperatorKind);
+                return nameBuilder.ToString();
+            }
+            return $"_{functionCount++}";
         }
 
-        private static string GetDerivedType(string @namespace, string wrapper)
+        private void WrapConstructor(Method method, string wrapper, string @params)
         {
-            return $"class {wrapper}{@namespace} : public {@namespace} {{ public: ";
-        }
-
-        private void WrapConstructor(Method method)
-        {
-            string wrapper = GetWrapper(method.TranslationUnit.Module);
             if (Options.CheckSymbols)
             {
                 method.Mangled = wrapper;
@@ -96,31 +149,27 @@ namespace CppSharp.Passes
             foreach (var param in method.Parameters.Where(
                 p => string.IsNullOrEmpty(p.OriginalName)))
                 param.Name = "_" + i++;
-            var @params = string.Join(", ", method.Parameters.Select(CastIfRVReference));
             var signature = string.Join(", ", method.GatherInternalParams(
                 Context.ParserOptions.IsItaniumLikeAbi).Select(
                     p => cppTypePrinter.VisitParameter(p)));
 
             string @namespace = method.Namespace.Visit(cppTypePrinter);
-            if (method.Access == AccessSpecifier.Protected)
+            Class @class = (Class) method.Namespace;
+            bool needSubclass = method.Access == AccessSpecifier.Protected || @class.IsAbstract;
+            if (needSubclass)
             {
-                Write(GetDerivedType(@namespace, wrapper));
-                Write($"{wrapper}{@namespace}");
-                Write($@"({string.Join(", ", method.Parameters.Select(
-                    p => cppTypePrinter.VisitParameter(p)))})");
-                WriteLine($": {@namespace}({@params}) {{}} }};");
-                Write($"extern \"C\" {{ void {wrapper}({signature}) ");
-                WriteLine($"{{ new ({Helpers.InstanceField}) {wrapper}{@namespace}({@params}); }} }}");
+                Write($"extern \"C\" {GetExporting()}void {wrapper}({signature}) ");
+                WriteLine($"{{ ::new ({Helpers.InstanceField}) {wrapper}{method.Namespace.Name}({@params}); }}");
             }
             else
             {
-                Write($"extern \"C\" ");
-                if (method.Namespace.Access == AccessSpecifier.Protected)
-                    Write($@"{{ class {wrapper}{method.Namespace.Namespace.Name} : public {
-                        method.Namespace.Namespace.Visit(cppTypePrinter)} ");
-                Write($"{{ void {wrapper}({signature}) ");
-                Write($"{{ new ({Helpers.InstanceField}) {@namespace}({@params}); }} }}");
-                if (method.Namespace.Access == AccessSpecifier.Protected)
+                Write("extern \"C\" ");
+                if (needSubclass)
+                    Write($@"class {wrapper}{method.Namespace.Namespace.Name} : public {
+                        method.Namespace.Namespace.Visit(cppTypePrinter)} {{ ");
+                Write($"{GetExporting()}void {wrapper}({signature}) ");
+                Write($"{{ ::new ({Helpers.InstanceField}) {@namespace}({@params}); }}");
+                if (needSubclass)
                     Write("; }");
                 NewLine();
             }
@@ -141,51 +190,43 @@ namespace CppSharp.Passes
                 cppTypePrinter, p.QualifiedType.Qualifiers)}) {p.Name}";
         }
 
-        private void WrapDestructor(Method method)
+        private void WrapDestructor(Method method, string wrapper)
         {
-            string wrapper = GetWrapper(method.TranslationUnit.Module);
             if (Options.CheckSymbols)
             {
                 method.Mangled = wrapper;
                 method.CallingConvention = CallingConvention.C;
             }
 
-            bool isProtected = method.Access == AccessSpecifier.Protected;
+            bool needSubclass = method.Access == AccessSpecifier.Protected ||
+                ((Class) method.Namespace).IsAbstract;
             string @namespace = method.Namespace.Visit(cppTypePrinter);
-            if (isProtected)
-                Write(GetDerivedType(@namespace, wrapper));
-            else
-                Write("extern \"C\" { ");
-            if (method.Namespace.Access == AccessSpecifier.Protected)
-                Write($@"class {wrapper}{method.Namespace.Namespace.Name} : public {
-                    method.Namespace.Namespace.Visit(cppTypePrinter)} {{ ");
-            Write($"void {wrapper}");
-            if (isProtected)
-                Write("protected");
-            Write($@"({@namespace}* {Helpers.InstanceField}) {{ {
-                Helpers.InstanceField}->~{method.Namespace.OriginalName}(); }} }}");
-            if (isProtected)
+            Write("extern \"C\" ");
+            Write($"{GetExporting()}void {wrapper}");
+            if (needSubclass)
+                Write("Protected");
+
+            string instance = Helpers.InstanceField;
+            string @class = needSubclass ? wrapper : @namespace;
+            Write($"({@class}* {instance}) {{ {instance}->~{method.Namespace.Name}(); }};");
+            if (needSubclass)
             {
                 NewLine();
-                Write($@"void {wrapper}({@namespace} {Helpers.InstanceField}) {{ {
-                   wrapper}{@namespace}::{wrapper}protected({Helpers.InstanceField}); }}");
+                Write($@"extern ""C"" {GetExporting()}void {wrapper}({wrapper}* {instance}) {{ {
+                    instance}->{wrapper}Protected({instance}); }}");
             }
-            if (method.Namespace.Access == AccessSpecifier.Protected)
-                Write("; }");
             NewLine();
         }
 
-        private void TakeFunctionAddress(Function function)
+        private void TakeFunctionAddress(Function function, string wrapper)
         {
-            string wrapper = GetWrapper(function.TranslationUnit.Module);
-            string @namespace = function.Namespace.Visit(cppTypePrinter);
+            string @namespace = function.OriginalNamespace.Visit(cppTypePrinter);
             if (function.Access == AccessSpecifier.Protected)
             {
-                Write(GetDerivedType(@namespace, wrapper));
+                Write($"class {wrapper}{function.Namespace.Name} : public {@namespace} {{ public: ");
                 Write("static constexpr ");
             }
-
-            string returnType = function.OriginalReturnType.Visit(cppTypePrinter);
+            TypePrinterResult returnType = function.OriginalReturnType.Visit(cppTypePrinter);
             string signature = GetSignature(function);
 
             string functionName = GetFunctionName(function, @namespace);
@@ -194,15 +235,19 @@ namespace CppSharp.Passes
 
             var method = function as Method;
             if (function.Namespace.Access == AccessSpecifier.Protected)
-                Write($@"class {wrapper}{function.Namespace.Namespace.Name} : public {
+                Write($@"class {wrapper}{function.Namespace.Name} : public {
                     function.Namespace.Namespace.Visit(cppTypePrinter)} {{ ");
-            Write($@"{returnType} ({(method != null && !method.IsStatic ?
-                (@namespace + "::") : string.Empty)}*{wrapper}){signature}");
+
+            string variable = $@"({(method?.IsStatic == false ?
+                (@namespace + "::") : string.Empty)}*{wrapper}){signature}";
+            returnType.NameSuffix.Append(' ').Append(variable);
+            Write(returnType);
+
             if (function.Access == AccessSpecifier.Protected)
             {
-                Write($" = &{wrapper}{@namespace}::{functionName};");
+                Write($" = &{wrapper}{function.Namespace.Name}::{functionName};");
                 WriteLine(" };");
-                Write($"auto {wrapper}protected = {wrapper}{@namespace}::{wrapper};");
+                Write($"auto {wrapper}Protected = {wrapper}{function.Namespace.Name}::{wrapper};");
             }
             else
             {
@@ -236,25 +281,47 @@ namespace CppSharp.Passes
 
         private string GetFunctionName(Function function, string @namespace)
         {
-            return $@"{(function.Access == AccessSpecifier.Protected ||
-                string.IsNullOrEmpty(@namespace) ?
-                string.Empty : (@namespace + "::"))}{function.OriginalName}{
-                (function.SpecializationInfo == null ? string.Empty : $@"<{
-                    string.Join(", ", function.SpecializationInfo.Arguments.Select(
-                        a =>
-                        {
-                            switch (a.Kind)
-                            {
-                                case TemplateArgument.ArgumentKind.Type:
-                                    return a.Type.Visit(cppTypePrinter).Type;
-                                case TemplateArgument.ArgumentKind.Declaration:
-                                    return a.Declaration.Visit(cppTypePrinter).Type;
-                                case TemplateArgument.ArgumentKind.Integral:
-                                    return a.Integral.ToString(CultureInfo.InvariantCulture);
-                            }
-                            throw new System.ArgumentOutOfRangeException(
-                                nameof(a.Kind), a.Kind, "Unsupported kind of template argument.");
-                        }))}>")}";
+            var nameBuilder = new StringBuilder();
+            if (function.Access != AccessSpecifier.Protected &&
+                !string.IsNullOrEmpty(@namespace))
+                nameBuilder.Append(@namespace).Append("::");
+
+            bool isConversionToSpecialization =
+                (function.OperatorKind == CXXOperatorKind.Conversion ||
+                 function.OperatorKind == CXXOperatorKind.ExplicitConversion) &&
+                function.OriginalReturnType.Type.Desugar(
+                    ).TryGetDeclaration(out ClassTemplateSpecialization specialization);
+
+            nameBuilder.Append(isConversionToSpecialization ?
+                "operator " : function.OriginalName);
+
+            if (function.SpecializationInfo != null)
+                nameBuilder.Append('<').Append(string.Join(", ",
+                    GetTemplateArguments(function.SpecializationInfo.Arguments))).Append('>');
+            else if (isConversionToSpecialization)
+                nameBuilder.Append(function.OriginalReturnType.Visit(cppTypePrinter));
+
+            return nameBuilder.ToString();
+        }
+
+        private IEnumerable<string> GetTemplateArguments(
+            IEnumerable<TemplateArgument> templateArguments)
+        {
+            return templateArguments.Select(
+                a =>
+                {
+                    switch (a.Kind)
+                    {
+                        case TemplateArgument.ArgumentKind.Type:
+                            return a.Type.Visit(cppTypePrinter).Type;
+                        case TemplateArgument.ArgumentKind.Declaration:
+                            return a.Declaration.Visit(cppTypePrinter).Type;
+                        case TemplateArgument.ArgumentKind.Integral:
+                            return a.Integral.ToString(CultureInfo.InvariantCulture);
+                    }
+                    throw new System.ArgumentOutOfRangeException(
+                        nameof(a.Kind), a.Kind, "Unsupported kind of template argument.");
+                });
         }
 
         private void WriteRedeclaration(Function function, string returnType,
@@ -271,7 +338,7 @@ namespace CppSharp.Passes
             Write(paramTypes);
             if (functionType.ExceptionSpecType == ExceptionSpecType.BasicNoexcept)
                 Write(" noexcept");
-            WriteLine($";{string.Concat(parentsOpen.Select(p => " }"))}");
+            WriteLine($";{string.Concat(parentsOpen.Select(_ => " }"))}");
         }
 
         private static Stack<string> GenerateNamespace(Function function)
@@ -286,7 +353,7 @@ namespace CppSharp.Passes
                 if (finalType.TryGetDeclaration(out declaration))
                     declarationContextsInSignature.Add(declaration.Namespace);
             }
-            var nestedNamespace = declarationContextsInSignature.FirstOrDefault(d =>
+            var nestedNamespace = declarationContextsInSignature.Find(d =>
                 d.Namespace is Namespace && !(d.Namespace is TranslationUnit));
             var parentsOpen = new Stack<string>();
             if (nestedNamespace != null)
@@ -303,10 +370,44 @@ namespace CppSharp.Passes
             return parentsOpen;
         }
 
-        private CppTypePrinter cppTypePrinter = new CppTypePrinter
+        private void ImplementIfAbstract(Class @class)
         {
-            ScopeKind = TypePrintScopeKind.Qualified
-        };
+            if (!@class.IsAbstract)
+                return;
+
+            Method abstractDtor = null;
+            cppTypePrinter.MethodScopeKind = TypePrintScopeKind.Local;
+            foreach (Method @abstract in @class.GetAbstractMethods())
+            {
+                if (@abstract.IsDestructor)
+                {
+                    abstractDtor = @abstract;
+                    continue;
+                }
+                Write(@abstract.Visit(cppTypePrinter) + " {");
+                Type returnType = @abstract.OriginalReturnType.Type.Desugar();
+                if (returnType.IsReference())
+                {
+                    var pointee = returnType.GetPointee().Desugar().Visit(cppTypePrinter);
+                    Write($" static bool __value = false; return ({pointee}&) __value; ");
+                }
+                else if (!returnType.IsPrimitiveType(PrimitiveType.Void))
+                    Write(" return {}; ");
+                Write("} ");
+            }
+            cppTypePrinter.MethodScopeKind = TypePrintScopeKind.Qualified;
+
+            WriteLine(" };");
+            if (abstractDtor != null && !implementedDtors.Contains(abstractDtor))
+            {
+                WriteLine($"{abstractDtor.Namespace.Name}::{abstractDtor.Name}() {{}}");
+                implementedDtors.Add(abstractDtor);
+            }
+        }
+
+        private CppTypePrinter cppTypePrinter;
+
         private int functionCount;
+        private HashSet<Method> implementedDtors = new HashSet<Method>();
     }
 }

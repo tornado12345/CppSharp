@@ -35,24 +35,30 @@ src/generator/generator
 *DesignTime*
 *TemporaryGeneratedFile*
 *FileListAbsolute*
-/build/scripts/llvm**
-/build/scripts/*.tar.gz
+/build/llvm/llvm-*
+/build/llvm/*.tar.gz
 /build/scripts/.vagrant
-/build/vs2012
-/build/vs2013
-/build/vs2015
-/build/vs2017
+/build/*.zip
+/build/*.pkg
+/build/vs20*
 /build/gmake
 /build/headers
-/build/netcore
+/build/premake/premake5*
+/build/gen
 /deps/llvm
-/deps/NUnit*
 /extra
+/include/include
+/include/libc
+/include/libcxx
+/include/libunwind
+/include/linux
 /site
 /wip
 /.vs
+/.vscode
 
 # Nuget: do not include produced packages
 /build/nuget/*.nupkg
 /build/nuget/tools/*
 
+**/obj

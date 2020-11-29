@@ -1,7 +1,8 @@
 using System.Collections.Generic;
 using CppSharp.Utils;
 using NUnit.Framework;
-using CppSharp.Parser;
+using CppSharp.AST;
+using System.IO;
 
 namespace CppSharp.Generator.Tests
 {
@@ -11,7 +12,7 @@ namespace CppSharp.Generator.Tests
         [Test]
         public void TestReadDependenciesWindows()
         {
-            var dependencies = GetDependencies("libexpat-windows");
+            IList<string> dependencies = GetDependencies("windows", "libexpat");
             Assert.AreEqual("KERNEL32.dll", dependencies[0]);
             Assert.AreEqual("msvcrt.dll", dependencies[1]);
             Assert.AreEqual("USER32.dll", dependencies[2]);
@@ -20,33 +21,30 @@ namespace CppSharp.Generator.Tests
         [Test]
         public void TestReadDependenciesLinux()
         {
-            var dependencies = GetDependencies("libexpat-linux");
+            IList<string> dependencies = GetDependencies("linux", "libexpat");
             Assert.AreEqual("libc.so.6", dependencies[0]);
         }
 
         [Test]
-        public void TestReadDependenciesOSX()
+        public void TestReadDependenciesMacOS()
         {
-            var dependencies = GetDependencies("libexpat-osx");
+            IList<string> dependencies = GetDependencies("macos", "libexpat");
             Assert.AreEqual("libexpat.1.dylib", dependencies[0]);
             Assert.AreEqual("libSystem.B.dylib", dependencies[1]);
         }
 
-        private static IList<string> GetDependencies(string library)
+        private static IList<string> GetDependencies(string dir, string library)
         {
-            var parserOptions = new ParserOptions();
-            parserOptions.AddLibraryDirs(GeneratorTest.GetTestsDirectory("Native"));
             var driverOptions = new DriverOptions();
-            var module = driverOptions.AddModule("Test");
+            Module module = driverOptions.AddModule("Test");
+            module.LibraryDirs.Add(Path.Combine(GeneratorTest.GetTestsDirectory("Native"), dir));
             module.Libraries.Add(library);
-            var driver = new Driver(driverOptions)
+            using (var driver = new Driver(driverOptions))
             {
-                ParserOptions = parserOptions
-            };
-            driver.Setup();
-            Assert.IsTrue(driver.ParseLibraries());
-            var dependencies = driver.Context.Symbols.Libraries[0].Dependencies;
-            return dependencies;
+                driver.Setup();
+                Assert.IsTrue(driver.ParseLibraries());
+                return driver.Context.Symbols.Libraries[0].Dependencies;
+            }
         }
     }
 }

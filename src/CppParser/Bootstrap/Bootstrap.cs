@@ -18,7 +18,7 @@ namespace CppSharp
     /// </summary>
     class Bootstrap : ILibrary
     {
-        static string GetSourceDirectory(string dir)
+        private static string GetSourceDirectory(string dir)
         {
             var directory = Directory.GetParent(Directory.GetCurrentDirectory());
 
@@ -35,6 +35,17 @@ namespace CppSharp
             throw new Exception("Could not find build directory: " + dir);
         }
 
+        private static string GetLLVMRevision(string llvmDir)
+            => File.ReadAllText(Path.Combine(llvmDir, "LLVM-commit"));
+
+        private static string GetLLVMBuildDirectory()
+        {
+            var llvmDir = Path.Combine(GetSourceDirectory("build"), "llvm");
+            var llvmRevision = GetLLVMRevision(llvmDir).Substring(0, 6);
+
+            return Directory.EnumerateDirectories(llvmDir, $"*{llvmRevision}*").FirstOrDefault();
+        }
+
         public void Setup(Driver driver)
         {
             driver.Options.GeneratorKind = GeneratorKind.CSharp;
@@ -48,16 +59,17 @@ namespace CppSharp
             module.Defines.Add("__STDC_LIMIT_MACROS");
             module.Defines.Add("__STDC_CONSTANT_MACROS");
 
-            var basePath = Path.Combine(GetSourceDirectory("build"), "scripts");
-            var llvmPath = Path.Combine(basePath, "..", "..", "deps", "llvm");
-            var clangPath = Path.Combine(llvmPath, "tools", "clang");
+            var llvmPath = GetLLVMBuildDirectory();
+
+            if (llvmPath == null)
+                throw new Exception("Could not find LLVM build directory");
 
             module.IncludeDirs.AddRange(new[]
             {
                 Path.Combine(llvmPath, "include"),
                 Path.Combine(llvmPath, "build", "include"),
-                Path.Combine(llvmPath, "build", "tools", "clang", "include"),
-                Path.Combine(clangPath, "include")
+                Path.Combine(llvmPath, "build", "clang", "include"),
+                Path.Combine(llvmPath, "clang", "include")
             });
 
             module.Headers.AddRange(new[]
@@ -96,6 +108,9 @@ namespace CppSharp
             exprUnit.Visit(exprSubclassVisitor);
             exprCxxUnit.Visit(exprSubclassVisitor);
             ExprClasses = exprSubclassVisitor.Classes;
+
+            CodeGeneratorHelpers.CppTypePrinter = new CppTypePrinter(driver.Context)
+                { ScopeKind = TypePrintScopeKind.Local };
 
             GenerateStmt(driver.Context);
             GenerateExpr(driver.Context);
@@ -185,6 +200,10 @@ namespace CppSharp
             managedCodeGen.GenerateDeclarations();
             WriteFile(managedCodeGen, Path.Combine("AST", "Stmt.cs"));
 
+            managedCodeGen = new ManagedVisitorCodeGenerator(ctx, decls.Union(ExprClasses));
+            managedCodeGen.Process();
+            WriteFile(managedCodeGen, Path.Combine("AST", "StmtVisitor.cs"));
+
             managedCodeGen = new StmtASTConverterCodeGenerator(ctx, decls, stmtClassEnum);
             managedCodeGen.Process();
             WriteFile(managedCodeGen, Path.Combine("Parser", "ASTConverter.Stmt.cs"));
@@ -258,26 +277,38 @@ namespace CppSharp
 
     class PreprocessDeclarations : AstVisitor
     {
+        private static void Check(Declaration decl)
+        {
+            if (string.IsNullOrWhiteSpace(decl.Name))
+                decl.ExplicitlyIgnore();
+
+            if (decl.Name.EndsWith("Bitfields", StringComparison.Ordinal))
+                decl.ExplicitlyIgnore();
+
+            if (decl.Name.EndsWith("Iterator", StringComparison.Ordinal))
+                decl.ExplicitlyIgnore();
+
+            if (decl.Name == "AssociationTy" ||
+                decl.Name == "AssociationIteratorTy")
+                decl.ExplicitlyIgnore();
+
+            if (decl.Name == "EmptyShell")
+                decl.ExplicitlyIgnore();
+
+            if (decl.Name == "APIntStorage" || decl.Name == "APFloatStorage")
+                decl.ExplicitlyIgnore();
+        }
+
         public override bool VisitClassDecl(Class @class)
         {
-            if (string.IsNullOrWhiteSpace(@class.Name))
-                @class.ExplicitlyIgnore();
-
             //
             // Statements
             //
 
-            if (@class.Name.EndsWith("Bitfields"))
-                @class.ExplicitlyIgnore();
+            if (CodeGeneratorHelpers.IsAbstractStmt(@class))
+                @class.IsAbstract = true;
 
-            if (@class.Name.EndsWith("Iterator"))
-                @class.ExplicitlyIgnore();
-
-            if (@class.Name == "EmptyShell")
-                @class.ExplicitlyIgnore();
-
-            if (@class.Name == "APIntStorage" || @class.Name == "APFloatStorage")
-                @class.ExplicitlyIgnore();
+            Check(@class);
 
             foreach (var @base in @class.Bases)
             {
@@ -350,6 +381,26 @@ namespace CppSharp
             }
 
             return base.VisitClassDecl(@class);
+        }
+
+        public override bool VisitClassTemplateDecl(ClassTemplate template)
+        {
+            Check(template);
+            return base.VisitClassTemplateDecl(template);
+        }
+
+        public override bool VisitTypeAliasTemplateDecl(TypeAliasTemplate template)
+        {
+            Check(template);
+            return base.VisitTypeAliasTemplateDecl(template);
+        }
+
+        public override bool VisitProperty(Property property)
+        {
+            if (property.Name == "stripLabelLikeStatements")
+                property.ExplicitlyIgnore();
+
+            return base.VisitProperty(property);
         }
 
         public override bool VisitEnumDecl(Enumeration @enum)
@@ -529,9 +580,30 @@ namespace CppSharp
                 WriteLine($"public {typeName} {propertyName} {{ get; set; }}");
             }
 
+            var rootBase = @class.GetNonIgnoredRootBase();
+            var isStmt = rootBase != null && rootBase.Name == "Stmt";
+
+            if (isStmt && !(@class.IsAbstract && @class.Name != "Stmt"))
+            {
+                NewLine();
+                GenerateVisitMethod(@class);
+            }
+
             UnindentAndWriteCloseBrace();
 
             return true;
+        }
+
+        private void GenerateVisitMethod(Class @class)
+        {
+            if (@class.IsAbstract)
+            {
+                WriteLine("public abstract T Visit<T>(IStmtVisitor<T> visitor);");
+                return;
+            }
+
+            WriteLine("public override T Visit<T>(IStmtVisitor<T> visitor) =>");
+            WriteLineIndent("visitor.Visit{0}(this);", @class.Name);
         }
 
         public override string GetBaseClassTypeName(BaseClassSpecifier @base)
@@ -560,6 +632,74 @@ namespace CppSharp
             DeclarationContext context)
         {
 
+        }
+    }
+
+    class ManagedVisitorCodeGenerator : ManagedParserCodeGenerator
+    {
+        public ManagedVisitorCodeGenerator(BindingContext context,
+            IEnumerable<Declaration> declarations)
+            : base(context, declarations)
+        {
+        }
+
+        public override void Process()
+        {
+            GenerateFilePreamble(CommentKind.BCPL);
+            NewLine();
+
+            WriteLine("namespace CppSharp.AST");
+            WriteOpenBraceAndIndent();
+
+            GenerateVisitor();
+            NewLine();
+
+            GenerateVisitorInterface();
+
+            UnindentAndWriteCloseBrace();
+        }
+
+        private void GenerateVisitor()
+        {
+            WriteLine($"public abstract partial class AstVisitor");
+            WriteOpenBraceAndIndent();
+
+            foreach (var @class in Declarations.OfType<Class>())
+            {
+                if (@class.Name == "Stmt") continue;
+
+                PushBlock();
+                var paramName = "stmt";
+                WriteLine("public virtual bool Visit{0}({0} {1})",
+                    @class.Name, paramName);
+                WriteOpenBraceAndIndent();
+
+                WriteLine($"if (!Visit{@class.BaseClass.Name}({paramName}))");
+                WriteLineIndent("return false;");
+                NewLine();
+
+                WriteLine("return true;");
+
+                UnindentAndWriteCloseBrace();
+                PopBlock(NewLineKind.BeforeNextBlock);
+            }
+
+            UnindentAndWriteCloseBrace();
+        }
+
+        private void GenerateVisitorInterface()
+        {
+            WriteLine($"public interface IStmtVisitor<out T>");
+            WriteOpenBraceAndIndent();
+
+            foreach (var @class in Declarations.OfType<Class>())
+            {
+                var paramName = "stmt";
+                WriteLine("T Visit{0}({0} {1});",
+                    @class.Name, paramName);
+            }
+
+            UnindentAndWriteCloseBrace();
         }
     }
 
@@ -1205,12 +1345,14 @@ namespace CppSharp
                 WriteLine($"_S->{fieldName} = WalkTemplateArgument(S->{methodName}());");
             else if (typeName.Contains("QualifiedType"))
                 WriteLine($"_S->{fieldName} = GetQualifiedType(S->{methodName}());");
-            else if (fieldName == "value" && @class.Bases.Exists(b => b.Class.Name.Contains("AP"))) {
+            else if (fieldName == "value" && @class.Bases.Exists(b => b.Class.Name.Contains("AP")))
+            {
                 // Use llvm::APInt or llvm::APFloat conversion methods
                 methodName = property.Type.IsPrimitiveType(PrimitiveType.ULongLong) ?
                     "getLimitedValue" : "convertToDouble";
                 WriteLine($"_S->{fieldName} = S->getValue().{methodName}();");
-            } else
+            }
+            else
                 WriteLine($"_S->{fieldName} = S->{methodName}();");
 
             if (validMethodExists)
@@ -1278,7 +1420,7 @@ namespace CppSharp
             "AST::Expr* Parser::WalkExpression(const clang::Expr* Expr)";
     }
 
-    class NativeParserCodeGenerator : CCodeGenerator
+    class NativeParserCodeGenerator : Generators.C.CCodeGenerator
     {
         internal readonly IEnumerable<Declaration> Declarations;
 
@@ -1348,8 +1490,7 @@ namespace CppSharp
 
     static class CodeGeneratorHelpers
     {
-        internal static CppTypePrinter CppTypePrinter = 
-            new CppTypePrinter { ScopeKind = TypePrintScopeKind.Local };
+        internal static CppTypePrinter CppTypePrinter;
 
         public static bool IsAbstractStmt(Class @class) => IsAbstractStmt(@class.Name);
 
@@ -1383,7 +1524,7 @@ namespace CppSharp
                     return true;
             }
 
-            if (property.Name == "beginLoc" || property.Name == "endLoc" &&
+            if ((property.Name == "beginLoc" || property.Name == "endLoc") &&
                 @class.Name != "Stmt")
                 return true;
 
@@ -1391,6 +1532,8 @@ namespace CppSharp
             {
                 case "stmtClass":
                 case "stmtClassName":
+                    return true;
+                case "isOMPStructuredBlock":
                     return true;
             }
 
@@ -1578,6 +1721,10 @@ namespace CppSharp
             if (method.Name == "children")
                 return true;
 
+            // CastExpr
+            if (method.Name == "path")
+                return true;
+
             // CXXNewExpr
             if (method.Name == "placement_arguments" && method.IsConst)
                 return true;
@@ -1641,7 +1788,7 @@ namespace CppSharp
 
             if (kind == GeneratorKind.CPlusPlus)
             {
-                if (CCodeGenerator.IsReservedKeyword(name))
+                if (Generators.C.CCodeGenerator.IsReservedKeyword(name))
                     name = $"_{name}";
             }
             else if (kind == GeneratorKind.CSharp)
@@ -1658,11 +1805,9 @@ namespace CppSharp
                 }
 
                 if (!hasConflict)
-                    name = CaseRenamePass.ConvertCaseString(decl,
-                        RenameCasePattern.UpperCamelCase);
-
-                if (CSharpSources.IsReservedKeyword(name))
-                    name = $"@{name}";
+                    name = CSharpSources.SafeIdentifier(
+                        CaseRenamePass.ConvertCaseString(decl,
+                            RenameCasePattern.UpperCamelCase));
             }
             else throw new NotImplementedException();
 

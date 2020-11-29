@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace CppSharp.AST
@@ -11,30 +12,74 @@ namespace CppSharp.AST
         bool AlreadyVisited(Type type);
     }
 
-    public interface IAstVisitor<out T> : ITypeVisitor<T>, IDeclVisitor<T>
+    public interface IAstVisitor<out T> : ITypeVisitor<T>,
+        IDeclVisitor<T>, IStmtVisitor<T>
     {
         AstVisitorOptions VisitOptions { get; }
     }
 
+    [Flags]
+    public enum VisitFlags
+    {
+        /// <summary>
+        /// We always visit classes, functions and declaration contexts.
+        /// </summary>
+        Default = 0,
+
+        ClassBases = 1 << 0,
+        ClassFields = 1 << 1,
+        ClassProperties = 1 << 2,
+        ClassMethods = 1 << 3,
+        ClassTemplateSpecializations = 1 << 4,
+        PropertyAccessors = 1 << 5,
+
+        NamespaceEnums = 1 << 6,
+        NamespaceTemplates = 1 << 7,
+        NamespaceTypedefs = 1 << 8,
+        NamespaceEvents = 1 << 9,
+        NamespaceVariables = 1 << 10,
+
+        FunctionReturnType = 1 << 11,
+        FunctionParameters = 1 << 12,
+        EventParameters = 1 << 13,
+        TemplateArguments = 1 << 14,
+
+        Any = ClassBases | ClassFields | ClassProperties | ClassMethods |
+            ClassTemplateSpecializations | PropertyAccessors |
+            NamespaceEnums | NamespaceTemplates | NamespaceTypedefs |
+            NamespaceEvents | NamespaceVariables |
+            FunctionReturnType | FunctionParameters |
+            EventParameters | TemplateArguments
+    }
+
     public class AstVisitorOptions
     {
-        public bool VisitClassBases = true;
-        public bool VisitClassFields = true;
-        public bool VisitClassProperties = true;
-        public bool VisitClassMethods = true;
-        public bool VisitClassTemplateSpecializations { get; set; } = true;
-        public bool VisitPropertyAccessors = false;
+        public AstVisitorOptions(VisitFlags flags)
+            => this.flags = flags;
 
-        public bool VisitNamespaceEnums = true;
-        public bool VisitNamespaceTemplates = true;
-        public bool VisitNamespaceTypedefs = true;
-        public bool VisitNamespaceEvents = true;
-        public bool VisitNamespaceVariables = true;
+        public bool VisitClassBases => (flags & VisitFlags.ClassBases) != 0;
+        public bool VisitClassFields => (flags & VisitFlags.ClassFields) != 0;
+        public bool VisitClassProperties => (flags & VisitFlags.ClassProperties) != 0;
+        public bool VisitClassMethods => (flags & VisitFlags.ClassMethods) != 0;
+        public bool VisitClassTemplateSpecializations => (flags & VisitFlags.ClassTemplateSpecializations) != 0;
+        public bool VisitPropertyAccessors => (flags & VisitFlags.PropertyAccessors) != 0;
 
-        public bool VisitFunctionReturnType = true;
-        public bool VisitFunctionParameters = true;
-        public bool VisitEventParameters = true;
-        public bool VisitTemplateArguments = true;
+        public bool VisitNamespaceEnums => (flags & VisitFlags.NamespaceEnums) != 0;
+        public bool VisitNamespaceTemplates => (flags & VisitFlags.NamespaceTemplates) != 0;
+        public bool VisitNamespaceTypedefs => (flags & VisitFlags.NamespaceTypedefs) != 0;
+        public bool VisitNamespaceEvents => (flags & VisitFlags.NamespaceEvents) != 0;
+        public bool VisitNamespaceVariables => (flags & VisitFlags.NamespaceVariables) != 0;
+
+        public bool VisitFunctionReturnType => (flags & VisitFlags.FunctionReturnType) != 0;
+        public bool VisitFunctionParameters => (flags & VisitFlags.FunctionParameters) != 0;
+        public bool VisitEventParameters => (flags & VisitFlags.EventParameters) != 0;
+        public bool VisitTemplateArguments => (flags & VisitFlags.TemplateArguments) != 0;
+
+        public void SetFlags(VisitFlags flags) => this.flags |= flags;
+        public void ResetFlags(VisitFlags flags) => this.flags = flags;
+        public void ClearFlags(VisitFlags flags) => this.flags &= ~flags;
+
+        private VisitFlags flags;
     }
 
     /// <summary>
@@ -43,16 +88,11 @@ namespace CppSharp.AST
     /// this will visit all the nodes in a default way that should be useful
     /// for a lot of applications.
     /// </summary>
-    public abstract class AstVisitor : IAstVisitor<bool>, IAstVisited
+    public abstract partial class AstVisitor : IAstVisitor<bool>, IAstVisited
     {
-        public ISet<object> Visited { get; private set; }
+        public ISet<object> Visited { get; private set; } = new HashSet<object>();
         public AstVisitorOptions VisitOptions { get; private set; }
-
-        protected AstVisitor()
-        {
-            Visited = new HashSet<object>();
-            VisitOptions = new AstVisitorOptions();
-        }
+            = new AstVisitorOptions(VisitFlags.Any & ~VisitFlags.PropertyAccessors);
 
         public bool AlreadyVisited(Type type)
         {
@@ -62,6 +102,11 @@ namespace CppSharp.AST
         public bool AlreadyVisited(Declaration decl)
         {
             return !Visited.Add(decl);
+        }
+
+        public bool AlreadyVisited(Stmt stmt)
+        {
+            return !Visited.Add(stmt);
         }
 
         #region Type Visitors
@@ -267,6 +312,11 @@ namespace CppSharp.AST
             return true;
         }
 
+        public bool VisitUnresolvedUsingType(UnresolvedUsingType unresolvedUsingType, TypeQualifiers quals)
+        {
+            return true;
+        }
+
         public bool VisitVectorType(VectorType vectorType, TypeQualifiers quals)
         {
             return true;
@@ -291,6 +341,11 @@ namespace CppSharp.AST
                 return false;
 
             return true;
+        }
+
+        public virtual bool VisitQualifiedType(QualifiedType type)
+        {
+            return type.Type.Visit(this, type.Qualifiers);
         }
 
         #endregion
@@ -457,6 +512,11 @@ namespace CppSharp.AST
         public virtual bool VisitVariableDecl(Variable variable)
         {
             if (!VisitDeclaration(variable))
+                return false;
+
+            // TODO: Remove this null check once CppParser can properly handle auto types.
+            // This is workaround for https://github.com/mono/CppSharp/issues/1412.            
+            if (variable.Type == null)
                 return false;
 
             return variable.Type.Visit(this, variable.QualifiedType.Qualifiers);
@@ -631,6 +691,19 @@ namespace CppSharp.AST
             return true;
         }
 
+        public bool VisitUnresolvedUsingDecl(UnresolvedUsingTypename unresolvedUsingTypename)
+        {
+            if (!VisitDeclaration(unresolvedUsingTypename))
+                return false;
+
+            return true;
+        }
+
         #endregion
+
+        public virtual bool VisitStmt(Stmt stmt)
+        {
+            return !AlreadyVisited(stmt);
+        }
     }
 }

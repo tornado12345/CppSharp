@@ -36,6 +36,12 @@ namespace CppSharp.AST
         public abstract object Clone();
     }
 
+    public enum TypeQualifiersMode : byte
+    {
+        Default,
+        Native
+    }
+
     /// <summary>
     /// Represents C++ type qualifiers.
     /// </summary>
@@ -44,10 +50,11 @@ namespace CppSharp.AST
         public bool IsConst;
         public bool IsVolatile;
         public bool IsRestrict;
+        public TypeQualifiersMode Mode;
 
         public override int GetHashCode() =>
             IsConst.GetHashCode() ^ IsVolatile.GetHashCode() ^
-                IsRestrict.GetHashCode();
+                IsRestrict.GetHashCode() ^ Mode.GetHashCode();
     }
 
     /// <summary>
@@ -68,12 +75,12 @@ namespace CppSharp.AST
             Qualifiers = qualifiers;
         }
 
-        public Type Type { get; set; }
-        public TypeQualifiers Qualifiers { get; set; }
+        public Type Type;
+        public TypeQualifiers Qualifiers;
 
         public T Visit<T>(ITypeVisitor<T> visitor)
         {
-            return Type.Visit(visitor, Qualifiers);
+            return visitor.VisitQualifiedType(this);
         }
 
         public override string ToString()
@@ -438,7 +445,11 @@ namespace CppSharp.AST
         public override bool Equals(object obj)
         {
             var typedef = obj as TypedefType;
-            return Declaration.Type.Equals(typedef == null ? obj : typedef.Declaration.Type);
+            if (typedef == null)
+                return false;
+
+            return Declaration.OriginalName == typedef.Declaration.OriginalName &&
+                   Declaration.Type.Equals(typedef.Declaration.Type);
         }
 
         public override int GetHashCode() =>
@@ -551,7 +562,7 @@ namespace CppSharp.AST
     /// <summary>
     /// Represents a template argument within a class template specialization.
     /// </summary>
-    public struct TemplateArgument
+    public class TemplateArgument
     {
         /// The kind of template argument we're storing.
         public enum ArgumentKind
@@ -866,10 +877,12 @@ namespace CppSharp.AST
             var type = obj as TemplateParameterSubstitutionType;
             if (type == null) return false;
 
-            return Replacement.Equals(type.Replacement);
+            return ReplacedParameter.Equals(type.ReplacedParameter) &&
+                Replacement.Equals(type.Replacement);
         }
 
-        public override int GetHashCode() => Replacement.GetHashCode();
+        public override int GetHashCode() =>
+            ReplacedParameter.GetHashCode() ^ Replacement.GetHashCode();
     }
 
     /// <summary>
@@ -1054,6 +1067,32 @@ namespace CppSharp.AST
 
         public override int GetHashCode() =>
             Desugared.GetHashCode() ^ BaseType.GetHashCode();
+    }
+
+    public class UnresolvedUsingType : Type
+    {
+        public UnresolvedUsingType()
+        {
+        }
+
+        public UnresolvedUsingType(UnresolvedUsingType type)
+            : base(type)
+        {
+        }
+
+        public UnresolvedUsingTypename Declaration { get; set; }
+
+        public override T Visit<T>(ITypeVisitor<T> visitor, TypeQualifiers quals = new TypeQualifiers())
+        {
+            return visitor.VisitUnresolvedUsingType(this, quals);
+        }
+
+        public override object Clone()
+        {
+            return new UnresolvedUsingType(this);
+        }
+
+        public override int GetHashCode() => Declaration.GetHashCode();
     }
 
     public class VectorType : Type
@@ -1251,8 +1290,10 @@ namespace CppSharp.AST
             TypeQualifiers quals);
         T VisitPackExpansionType(PackExpansionType packExpansionType, TypeQualifiers quals);
         T VisitUnaryTransformType(UnaryTransformType unaryTransformType, TypeQualifiers quals);
+        T VisitUnresolvedUsingType(UnresolvedUsingType unresolvedUsingType, TypeQualifiers quals);
         T VisitVectorType(VectorType vectorType, TypeQualifiers quals);
         T VisitCILType(CILType type, TypeQualifiers quals);
         T VisitUnsupportedType(UnsupportedType type, TypeQualifiers quals);
+        T VisitQualifiedType(QualifiedType type);
     }
 }

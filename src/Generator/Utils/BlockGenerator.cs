@@ -17,12 +17,14 @@ namespace CppSharp
     public enum BlockKind
     {
         Unknown,
+        Block,
         BlockComment,
         InlineComment,
         Header,
         Footer,
         Usings,
         Namespace,
+        TranslationUnit,
         Enum,
         EnumItem,
         Typedef,
@@ -36,6 +38,7 @@ namespace CppSharp
         Event,
         Variable,
         Property,
+        Unreachable,
         Field,
         VTableDelegate,
         Region,
@@ -50,6 +53,10 @@ namespace CppSharp
         Destructor,
         AccessSpecifier,
         Fields,
+        Constructor,
+        ConstructorBody,
+        DestructorBody,
+        FinalizerBody
     }
 
     [DebuggerDisplay("{Kind} | {Object}")]
@@ -204,6 +211,12 @@ namespace CppSharp
             Text.NeedNewLine();
         }
 
+        public bool NeedsNewLine
+        {
+            get => Text.NeedsNewLine;
+            set => Text.NeedsNewLine = value;
+        }
+
         public void ResetNewLine()
         {
             Text.ResetNewLine();
@@ -236,6 +249,8 @@ namespace CppSharp
 
     public abstract class BlockGenerator : ITextGenerator
     {
+        private static string[] LineBreakSequences = new[] { "\r\n", "\r", "\n" };
+
         public Block RootBlock { get; }
         public Block ActiveBlock { get; private set; }
         public uint CurrentIndentation => ActiveBlock.Text.CurrentIndentation;
@@ -308,6 +323,40 @@ namespace CppSharp
             ActiveBlock.WriteLine(msg, args);
         }
 
+        public void WriteLines(string msg, bool trimIndentation = false)
+        {
+            var lines = msg.Split(LineBreakSequences, StringSplitOptions.None);
+            int indentation = int.MaxValue;
+
+            if (trimIndentation)
+            {
+                foreach(var line in lines)
+                { 
+                    for (int i = 0; i < line.Length; ++i)
+                    {
+                        if (char.IsWhiteSpace(line[i]))
+                            continue;
+                        
+                        if (i < indentation)
+                        { 
+                            indentation = i;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            bool foundNonEmptyLine = false;
+            foreach (var line in lines)
+            {
+                if (!foundNonEmptyLine && string.IsNullOrEmpty(line))
+                    continue;
+
+                WriteLine(line.Length >= indentation ? line.Substring(indentation) : line);
+                foundNonEmptyLine = true;
+            }
+        }
+
         public void WriteLineIndent(string msg, params object[] args)
         {
             ActiveBlock.WriteLineIndent(msg, args);
@@ -326,6 +375,12 @@ namespace CppSharp
         public void NeedNewLine()
         {
             ActiveBlock.NeedNewLine();
+        }
+
+        public bool NeedsNewLine
+        {
+            get => ActiveBlock.NeedsNewLine;
+            set => ActiveBlock.NeedsNewLine = value;
         }
 
         public void ResetNewLine()

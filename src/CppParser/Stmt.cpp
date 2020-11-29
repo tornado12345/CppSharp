@@ -14,16 +14,16 @@ namespace CppSharp { namespace CppParser { namespace AST {
 Stmt::Stmt()
     : stmtClass(StmtClass::NoStmt)
     , sourceRange(SourceRange())
+    , beginLoc(SourceLocation())
     , endLoc(SourceLocation())
-    , stripLabelLikeStatements(nullptr)
 {
 }
 
 Stmt::Stmt(StmtClass klass)
     : stmtClass(klass)
     , sourceRange(SourceRange())
+    , beginLoc(SourceLocation())
     , endLoc(SourceLocation())
-    , stripLabelLikeStatements(nullptr)
 {
 }
 

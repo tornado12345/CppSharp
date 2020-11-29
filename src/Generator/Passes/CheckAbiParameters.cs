@@ -1,4 +1,6 @@
 ﻿using CppSharp.AST;
+using CppSharp.AST.Extensions;
+using System.Linq;
 
 namespace CppSharp.Passes
 {
@@ -23,25 +25,20 @@ namespace CppSharp.Passes
     /// </summary>
     public class CheckAbiParameters : TranslationUnitPass
     {
-        public override bool VisitClassDecl(Class @class)
-        {
-            if (!base.VisitClassDecl(@class))
-                return false;
-
-            if (@class.IsDependent || @class.Layout.Fields.Count > 0 || @class.Fields.Count > 0)
-                return false;
-
-            @class.Layout.Size = @class.Layout.DataSize = 0;
-
-            return true;
-        }
-
         public override bool VisitFunctionDecl(Function function)
         {
             if (!VisitDeclaration(function))
                 return false;
 
-            if (function.IsReturnIndirect)
+            var isReturnIndirect = function.IsReturnIndirect || (
+                    Context.ParserOptions.IsMicrosoftAbi &&
+                    function is Method &&
+                    !function.ReturnType.Type.Desugar().IsAddress()  &&
+                    function.ReturnType.Type.Desugar().TryGetDeclaration(out Class returnTypeDecl) && 
+                    returnTypeDecl.IsPOD && 
+                    returnTypeDecl.Layout.Size <= 8);
+
+            if (isReturnIndirect)
             {
                 var indirectParam = new Parameter()
                     {
@@ -68,7 +65,7 @@ namespace CppSharp.Passes
 
             // Deleting destructors (default in v-table) accept an i32 bitfield as a
             // second parameter in MS ABI.
-            if (method != null && method.IsDestructor && Context.ParserOptions.IsMicrosoftAbi)
+            if (method != null && method.IsDestructor && method.IsVirtual && Context.ParserOptions.IsMicrosoftAbi)
             {
                 method.Parameters.Add(new Parameter
                 {
@@ -79,7 +76,10 @@ namespace CppSharp.Passes
                 });
             }
 
-            // TODO: Handle indirect parameters
+            foreach (var param in function.Parameters.Where(p => p.IsIndirect))
+            {
+                param.QualifiedType = new QualifiedType(new PointerType(param.QualifiedType));
+            }
 
             return true;
         }

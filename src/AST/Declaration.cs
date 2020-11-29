@@ -60,13 +60,22 @@ namespace CppSharp.AST
 
                 return GenerationKind.Generate;
             }
-            set { generationKind = value; }
+
+            set
+            {
+                generationKind = value;
+            }
         }
 
         /// <summary>
         /// Whether the declaration should be generated.
         /// </summary>
         public virtual bool IsGenerated => GenerationKind == GenerationKind.Generate;
+
+        /// <summary>
+        /// Whether the declaration has an explicit set generation kind.
+        /// </summary>
+        public bool HasExplicitGenerationKind => generationKind.HasValue;
 
         /// <summary>
         /// Whether the declaration was explicitly set to be generated via
@@ -117,7 +126,8 @@ namespace CppSharp.AST
         public int LineNumberStart { get; set; }
         public int LineNumberEnd { get; set; }
         public bool IsImplicit { get; set; }
-        public int MaxFieldAlignment { get; set; }
+        public int AlignAs { get; set; }
+        public int MaxFieldAlignment { get; set; }        
 
         private DeclarationContext @namespace;
         public DeclarationContext OriginalNamespace;
@@ -294,6 +304,9 @@ namespace CppSharp.AST
         // True if the declaration is dependent.
         public bool IsDependent;
 
+        // True if the declaration is deprecated.
+        public bool IsDeprecated;
+
         // Keeps a reference to the complete version of this declaration.
         public Declaration CompleteDeclaration;
 
@@ -320,6 +333,9 @@ namespace CppSharp.AST
         public List<Attribute> Attributes { get; private set; }
 
         public List<Declaration> Redeclarations { get; } = new List<Declaration>();
+
+        // Custom declaration map for custom code generation.
+        public object DeclMap { get; set; }
 
         protected Declaration()
         {
@@ -359,6 +375,7 @@ namespace CppSharp.AST
             LineNumberEnd = declaration.LineNumberEnd;
             IsImplicit = declaration.IsImplicit;
             AssociatedDeclaration = declaration.AssociatedDeclaration;
+            DeclMap = declaration.DeclMap;
         }
 
         public override string ToString()
@@ -399,5 +416,6 @@ namespace CppSharp.AST
         T VisitTemplateParameterDecl(TypeTemplateParameter templateParameter);
         T VisitNonTypeTemplateParameterDecl(NonTypeTemplateParameter nonTypeTemplateParameter);
         T VisitTypeAliasTemplateDecl(TypeAliasTemplate typeAliasTemplate);
+        T VisitUnresolvedUsingDecl(UnresolvedUsingTypename unresolvedUsingTypename);
     }
 }

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using CppSharp.AST;
 using CppSharp.Passes;
+using CppSharp.Parser;
 
 namespace CppSharp.Generators.CSharp
 {
@@ -25,19 +26,26 @@ namespace CppSharp.Generators.CSharp
 
         public override bool SetupPasses()
         {
+            if (Context.Options.GenerateDefaultValuesForArguments)
+            {
+                Context.TranslationUnitPasses.AddPass(new FixDefaultParamValuesOfOverridesPass());
+                Context.TranslationUnitPasses.AddPass(new HandleDefaultParamValuesPass());
+            }
+
             // Both the CheckOperatorsOverloadsPass and CheckAbiParameters can
             // create and and new parameters to functions and methods. Make sure
             // CheckAbiParameters runs last because hidden structure parameters
             // should always occur first.
 
-            Context.TranslationUnitPasses.AddPass(new CheckAbiParameters());
+            if (Context.ParserOptions.LanguageVersion > LanguageVersion.C99_GNU)
+                Context.TranslationUnitPasses.AddPass(new CheckAbiParameters());
 
             return true;
         }
 
         protected override string TypePrinterDelegate(Type type)
         {
-            return type.Visit(typePrinter).Type;
+            return type.Visit(typePrinter);
         }
     }
 }

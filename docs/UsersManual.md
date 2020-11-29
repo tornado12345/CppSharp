@@ -345,10 +345,16 @@ Related passes:
 
 ## Limitations
 
-Support for these features is limited or only partial: 
+Support for these features is limited: 
 
 - Exceptions
 - RTTI
+
+They are supported and taken into account by the C++ parser for bindings generation,
+but there is currently no way to catch C++ exceptions from C#.
+
+There is also no way to check RTTI type information for a specific type from C#,
+but not an issue in practice since C# itself provides this via `GetType()`.
 
 ## Standard library support
 
@@ -431,3 +437,16 @@ languages.
 Some internal functionalities are also implemented as passes like checking for
 invalid declaration names or resolving incomplete declarations. Please check the
 developer manual for more information about these.
+
+# 5. Advanced use cases
+
+## Windows
+
+If you're exposing C++ functions on Windows, you'll have to add the `__declspec(dllexport)` directive, otherwise the symbols won't be found when calling them from the managed world. You could also add the directive to a class directly, like this:
+
+```c++
+class __declspec(dllexport) ExposedClass
+{
+  // class definition
+}
+```

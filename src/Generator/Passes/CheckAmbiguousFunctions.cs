@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
-using CppSharp.Types;
 using CppSharp.Generators;
 
 namespace CppSharp.Passes
@@ -43,18 +42,19 @@ namespace CppSharp.Passes
 
             foreach (var overload in overloads)
             {
-                if (function.OperatorKind == CXXOperatorKind.Conversion)
-                    continue;
-                if (function.OperatorKind == CXXOperatorKind.ExplicitConversion)
-                    continue;
-
                 if (overload == function) continue;
 
                 if (!overload.IsGenerated) continue;
 
-                if (CheckConstnessForAmbiguity(function, overload) ||
-                    CheckDefaultParametersForAmbiguity(function, overload) ||
-                    CheckParametersPointerConstnessForAmbiguity(function, overload))
+                var ambiguous = 
+                    function.OperatorKind == CXXOperatorKind.Conversion ||
+                    function.OperatorKind == CXXOperatorKind.ExplicitConversion
+                    ? CheckConversionAmbiguity(function, overload)
+                    : CheckConstnessForAmbiguity(function, overload) ||
+                      CheckDefaultParametersForAmbiguity(function, overload) ||
+                      CheckParametersPointerConstnessForAmbiguity(function, overload);
+
+                if (ambiguous)
                 {
                     function.IsAmbiguous = true;
                     overload.IsAmbiguous = true;
@@ -75,11 +75,22 @@ namespace CppSharp.Passes
 
             var commonParameters = Math.Min(functionParams.Count, overloadParams.Count);
 
+            int functionMappedParams = 0;
+            int overloadMappedParams = 0;
+
             var i = 0;
             for (; i < commonParameters; ++i)
             {
-                AST.Type funcType = GetFinalType(functionParams[i]);
-                AST.Type overloadType = GetFinalType(overloadParams[i]);
+                AST.Type funcType = functionParams[i].Type.GetMappedType(
+                    TypeMaps, Options.GeneratorKind);
+                AST.Type overloadType = overloadParams[i].Type.GetMappedType(
+                    TypeMaps, Options.GeneratorKind);
+
+                if (!funcType.Equals(functionParams[i].Type.Desugar()))
+                    functionMappedParams++;
+
+                if (!overloadType.Equals(overloadParams[i].Type.Desugar()))
+                    overloadMappedParams++;
 
                 AST.Type funcPointee = funcType.GetFinalPointee() ?? funcType;
                 AST.Type overloadPointee = overloadType.GetFinalPointee() ?? overloadType;
@@ -104,7 +115,8 @@ namespace CppSharp.Passes
                     return false;
             }
 
-            if (functionParams.Count > overloadParams.Count)
+            if (functionParams.Count > overloadParams.Count ||
+                functionMappedParams < overloadMappedParams)
                 overload.ExplicitlyIgnore();
             else
                 function.ExplicitlyIgnore();
@@ -137,30 +149,6 @@ namespace CppSharp.Passes
             return functionParams;
         }
 
-        private AST.Type GetFinalType(Parameter parameter)
-        {
-            TypeMap typeMap;
-            if (Context.TypeMaps.FindTypeMap(parameter.Type, out typeMap))
-            {
-                var typePrinterContext = new TypePrinterContext
-                {
-                    Kind = TypePrinterContextKind.Managed,
-                    Parameter = parameter,
-                    Type = typeMap.Type
-                };
-
-                switch (Options.GeneratorKind)
-                {
-                    case Generators.GeneratorKind.CLI:
-                        return typeMap.CLISignatureType(typePrinterContext).Desugar();
-                    case Generators.GeneratorKind.CSharp:
-                        return typeMap.CSharpSignatureType(typePrinterContext).Desugar();
-                }
-            }
-
-            return parameter.Type.Desugar();
-        }
-
         private static bool CheckConstnessForAmbiguity(Function function, Function overload)
         {
             var method1 = function as Method;
@@ -178,6 +166,35 @@ namespace CppSharp.Passes
             }
 
             if (method2.IsConst && !method1.IsConst && sameParams)
+            {
+                method2.ExplicitlyIgnore();
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool CheckConversionAmbiguity(Function function, Function overload)
+        {
+            var method1 = function as Method;
+            var method2 = overload as Method;
+            if (method1 == null || method2 == null)
+                return false;
+
+            var type1 = method1.ReturnType.Type.Desugar();
+            var type2 = method2.ReturnType.Type.Desugar();
+
+            if (type1 is PointerType pointerType1 && 
+                type2 is PointerType pointerType2)
+            {
+                type1 = pointerType1.GetPointee();
+                type2 = pointerType2.GetPointee();
+            }
+
+            var mappedType1 = type1.GetMappedType(TypeMaps, Options.GeneratorKind);
+            var mappedType2 = type2.GetMappedType(TypeMaps, Options.GeneratorKind);
+
+            if (mappedType1.Equals(mappedType2))
             {
                 method2.ExplicitlyIgnore();
                 return true;

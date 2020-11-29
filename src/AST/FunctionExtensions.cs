@@ -16,18 +16,8 @@ namespace CppSharp.AST
 
             var pointer = new QualifiedType(new PointerType(new QualifiedType(new BuiltinType(PrimitiveType.Void))));
 
-            if (isInstanceMethod && !isItaniumLikeAbi)
-            {
-                @params.Add(new Parameter
-                    {
-                        QualifiedType = pointer,
-                        Name = "__instance",
-                        Namespace = function
-                    });
-            }
-
-            if (!function.HasIndirectReturnTypeParameter &&
-                isInstanceMethod && isItaniumLikeAbi)
+            if (isInstanceMethod &&
+                (!isItaniumLikeAbi || !function.HasIndirectReturnTypeParameter))
             {
                 @params.Add(new Parameter
                     {
@@ -43,7 +33,9 @@ namespace CppSharp.AST
             {
                 @params.Add(new Parameter
                     {
-                        QualifiedType = universalDelegate && param.Kind == ParameterKind.IndirectReturnType ?
+                        QualifiedType = universalDelegate &&
+                            (param.Kind == ParameterKind.IndirectReturnType ||
+                             param.Type.Desugar().IsPointerTo(out FunctionType functionType)) ?
                             pointer : param.QualifiedType,
                         Kind = param.Kind,
                         Usage = param.Usage,
@@ -93,11 +85,24 @@ namespace CppSharp.AST
         public static bool CanOverride(this Method @override, Method method)
         {
             return (method.OriginalName == @override.OriginalName &&
+                method.IsVirtual == @override.IsVirtual &&
                 method.OriginalReturnType.ResolvesTo(@override.OriginalReturnType) &&
                 method.Parameters.Where(p => p.Kind != ParameterKind.IndirectReturnType).SequenceEqual(
                     @override.Parameters.Where(p => p.Kind != ParameterKind.IndirectReturnType),
                     ParameterTypeComparer.Instance)) ||
                 (@override.IsDestructor && method.IsDestructor && method.IsVirtual);
+        }
+
+        public static bool NeedsSymbol(this Method method)
+        {
+            Class @class = (Class) method.Namespace;
+            // virtual functions cannot really be inlined and
+            // we don't need their symbols anyway as we call them through the v-table
+            return (!method.IsVirtual && !method.IsSynthetized &&
+                !method.IsDefaultConstructor && !method.IsCopyConstructor && !method.IsDestructor) ||
+                (method.IsDefaultConstructor && @class.HasNonTrivialDefaultConstructor) ||
+                (method.IsCopyConstructor && @class.HasNonTrivialCopyConstructor) ||
+                (method.IsDestructor && !method.IsVirtual && @class.HasNonTrivialDestructor);
         }
     }
 }

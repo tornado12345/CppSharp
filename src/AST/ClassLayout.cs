@@ -73,11 +73,33 @@ namespace CppSharp.AST
         public VTableLayout Layout;
     }
 
+    public enum RecordArgABI
+    {
+        /// <summary>
+        /// <para>Pass it using the normal C aggregate rules for the ABI,</para>
+        /// <para>potentially introducing extra copies and passing some</para>
+        /// <para>or all of it in registers.</para>
+        /// </summary>
+        Default = 0,
+        /// <summary>
+        /// <para>Pass it on the stack using its defined layout.</para>
+        /// <para>The argument must be evaluated directly into the correct</para>
+        /// <para>stack position in the arguments area, and the call machinery</para>
+        /// <para>must not move it or introduce extra copies.</para>
+        /// </summary>
+        DirectInMemory = 1,
+        /// <summary>Pass it as a pointer to temporary memory.</summary>
+        Indirect = 2
+    };
+
     // Represents ABI-specific layout details for a class.
     public class ClassLayout
     {
         public CppAbi ABI { get; set; }
 
+        /// Provides native argument ABI information.
+        public RecordArgABI ArgABI { get; set; }
+        
         /// Virtual function tables in Microsoft mode.
         public List<VFTableInfo> VFTables { get; set; }
 
@@ -143,11 +165,18 @@ namespace CppSharp.AST
             {
                 if (vTablePointers == null)
                 {
-                    vTablePointers = new List<LayoutField>(Fields.Where(f => f.IsVTablePtr));
+                    vTablePointers = ABI == CppAbi.Microsoft ?
+                        new List<LayoutField>(Fields.Where(f => f.IsVTablePtr)) :
+                        new List<LayoutField> { Fields.First(f => f.IsVTablePtr) };
                 }
                 return vTablePointers;
             }
         }
+
+        /// <summary>
+        /// Indicates whether this class layout has a subclass at a non-zero offset.
+        /// </summary>
+        public bool HasSubclassAtNonZeroOffset { get; set; }
 
         private List<LayoutField> vTablePointers;
     }

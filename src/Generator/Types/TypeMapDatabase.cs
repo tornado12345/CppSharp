@@ -11,9 +11,11 @@ namespace CppSharp.Types
     public class TypeMapDatabase : ITypeMapDatabase
     {
         public IDictionary<string, TypeMap> TypeMaps { get; set; }
+        private readonly BindingContext Context;
 
         public TypeMapDatabase(BindingContext bindingContext)
         {
+            Context = bindingContext;
             TypeMaps = new Dictionary<string, TypeMap>();
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -44,7 +46,12 @@ namespace CppSharp.Types
                         var typeMap = (TypeMap) Activator.CreateInstance(type);
                         typeMap.Context = bindingContext;
                         typeMap.TypeMapDatabase = this;
-                        this.TypeMaps[attr.Type] = typeMap;
+
+                        // Custom types won't be overwritten by CppSharp ones.
+                        if (!TypeMaps.ContainsKey(attr.Type))
+                        {
+                            TypeMaps.Add(attr.Type, typeMap);
+                        }
                     }
                 }
             }
@@ -52,9 +59,11 @@ namespace CppSharp.Types
 
         public bool FindTypeMap(Type type, out TypeMap typeMap)
         {
+            // Looks up the type in the cache map.
             if (typeMaps.ContainsKey(type))
             {
                 typeMap = typeMaps[type];
+                typeMap.Type = type;
                 return typeMap.IsEnabled;
             }
 
@@ -65,6 +74,7 @@ namespace CppSharp.Types
                 if (specialization != null &&
                     FindTypeMap(specialization, out typeMap))
                     return true;
+
                 if (template.Template.TemplatedDecl != null)
                 {
                     if (FindTypeMap(template.Template.TemplatedDecl,
@@ -73,38 +83,46 @@ namespace CppSharp.Types
                         typeMap.Type = type;
                         return true;
                     }
+
                     return false;
                 }
             }
 
             Type desugared = type.Desugar();
             desugared = (desugared.GetFinalPointee() ?? desugared).Desugar();
+
             bool printExtra = desugared.IsPrimitiveType() ||
                 (desugared.GetFinalPointee() ?? desugared).Desugar().IsPrimitiveType();
-            var typePrinter = new CppTypePrinter
+
+            var typePrinter = new CppTypePrinter(Context)
             {
+                ResolveTypeMaps = false,
                 PrintTypeQualifiers = printExtra,
                 PrintTypeModifiers = printExtra,
                 PrintLogicalNames = true
             };
 
-            foreach (var resolveTypeDefs in new[] { true, false })
+            typePrinter.PushContext(TypePrinterContextKind.Native);
+
+            foreach (var resolveTypeDefs in new[] { false, true })
+            {
                 foreach (var typePrintScopeKind in
                     new[] { TypePrintScopeKind.Local, TypePrintScopeKind.Qualified })
                 {
                     typePrinter.ResolveTypedefs = resolveTypeDefs;
                     typePrinter.ScopeKind = typePrintScopeKind;
-                    if (FindTypeMap(type.Visit(typePrinter), out typeMap))
+                    var typeName = type.Visit(typePrinter);
+                    if (FindTypeMap(typeName, out typeMap))
                     {
                         typeMap.Type = type;
                         typeMaps[type] = typeMap;
                         return true;
                     }
                 }
+            }
 
             typeMap = null;
-            var typedef = type as TypedefType;
-            return typedef != null && FindTypeMap(typedef.Declaration.Type, out typeMap);
+            return false;
         }
 
         public bool FindTypeMap(Declaration declaration, out TypeMap typeMap) =>

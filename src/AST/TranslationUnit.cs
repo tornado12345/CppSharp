@@ -19,6 +19,7 @@ namespace CppSharp.AST
         public TranslationUnit(string file) : this()
         {
             FilePath = file;
+            IncludePath = file;
         }
 
         /// Contains the macros present in the unit.
@@ -62,7 +63,12 @@ namespace CppSharp.AST
         {
             get
             {
-                if (fileRelativeDirectory != null) return fileRelativeDirectory;
+                if (fileRelativeDirectory != null)
+                    return fileRelativeDirectory;
+
+                if (IncludePath == null)
+                    return string.Empty;
+
                 var path = IncludePath.Replace('\\', '/');
                 var index = path.LastIndexOf('/');
                 return fileRelativeDirectory = path.Substring(0, index);
@@ -73,6 +79,7 @@ namespace CppSharp.AST
         {
             get
             {
+                if (!IsValid) return string.Empty;
                 return fileRelativePath ??
                     (fileRelativePath = Path.Combine(FileRelativeDirectory, FileName));
             }
@@ -82,5 +89,7 @@ namespace CppSharp.AST
         {
             return visitor.VisitTranslationUnit(this);
         }
+
+        public override string ToString() => FileName;
     }
 }

@@ -1,11 +1,16 @@
-﻿using System.Linq;
+﻿using System;
+using System.Linq;
 using CppSharp.AST;
+using CppSharp.AST.Extensions;
 using CppSharp.Generators;
 
 namespace CppSharp.Passes
 {
     public class FieldToPropertyPass : TranslationUnitPass
     {
+        public FieldToPropertyPass() => VisitOptions.ResetFlags(
+            VisitFlags.ClassFields | VisitFlags.ClassTemplateSpecializations);
+
         public override bool VisitClassDecl(Class @class)
         {
             if (@class.CompleteDeclaration != null)
@@ -19,11 +24,17 @@ namespace CppSharp.Passes
             if (!VisitDeclaration(field))
                 return false;
 
-            var @class = field.Namespace as Class;
-            if (@class == null)
+            if (ASTUtils.CheckIgnoreField(field))
                 return false;
 
-            if (ASTUtils.CheckIgnoreField(field))
+            if (Options.GeneratorKind == GeneratorKind.CPlusPlus)
+            {
+                if (field.Access != AccessSpecifier.Public)
+                    return false;
+            }
+
+            var @class = field.Namespace as Class;
+            if (@class == null)
                 return false;
 
             // Check if we already have a synthetized property.
@@ -39,8 +50,13 @@ namespace CppSharp.Passes
                 Namespace = field.Namespace,
                 QualifiedType = field.QualifiedType,
                 Access = field.Access,
-                Field = field
+                Field = field,
+                AssociatedDeclaration = field
             };
+
+            if (Options.GeneratorKind == GeneratorKind.C ||
+                Options.GeneratorKind == GeneratorKind.CPlusPlus)
+                GenerateAcessorMethods(field, prop);
 
             // do not rename value-class fields because they would be
             // generated as fields later on even though they are wrapped by properties;
@@ -54,6 +70,52 @@ namespace CppSharp.Passes
             Diagnostics.Debug($"Property created from field: {field.QualifiedName}");
 
             return false;
+        }
+
+        private void GenerateAcessorMethods(Field field, Property property)
+        {
+            var @class = field.Namespace as Class;
+
+            var getter = new Method
+            {
+                Name = $"get_{field.Name}",
+                Namespace = @class,
+                ReturnType = field.QualifiedType,
+                Access = field.Access,
+                AssociatedDeclaration = property,
+                IsStatic = field.IsStatic,
+                SynthKind = FunctionSynthKind.FieldAcessor
+            };
+
+            property.GetMethod = getter;
+            @class.Methods.Add(getter);
+
+            var isSetterInvalid = field.QualifiedType.IsConstRef();
+            if (!isSetterInvalid)
+            {
+                var setter = new Method
+                {
+                    Name = $"set_{field.Name}",
+                    Namespace = @class,
+                    ReturnType = new QualifiedType(new BuiltinType(PrimitiveType.Void)),
+                    Access = field.Access,
+                    AssociatedDeclaration = property,
+                    IsStatic = field.IsStatic,
+                    SynthKind = FunctionSynthKind.FieldAcessor
+                };
+
+                var param = new Parameter
+                {
+                    Name = "value",
+                    QualifiedType = field.QualifiedType,
+                    Namespace = setter
+                };
+
+                setter.Parameters.Add(param);
+
+                property.SetMethod = setter;
+                @class.Methods.Add(setter);
+            }
         }
     }
 }

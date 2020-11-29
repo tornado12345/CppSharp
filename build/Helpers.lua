@@ -1,12 +1,15 @@
 -- This module checks for the all the project dependencies.
+require('vstudio')
+require('premake/premake.fixes')
+require('premake/premake.extensions')
 
 newoption {
    trigger     = "arch",
    description = "Choose a particular architecture / bitness",
+   default = "x64",
    allowed = {
       { "x86",  "x86 32-bits" },
       { "x64",  "x64 64-bits" },
-      { "AnyCPU",  "Any CPU (.NET)" },
    }
 }
 
@@ -15,71 +18,44 @@ newoption {
    description = "disable C++-11 ABI on GCC 4.9+"
 }
 
-explicit_target_architecture = _OPTIONS["arch"]
+newoption {
+   trigger = "disable-tests",
+   description = "disable tests from being included"
+}
 
-function is_64_bits_mono_runtime()
-  result, errorcode = os.outputof("mono --version")
-  local arch = string.match(result, "Architecture:%s*([%w]+)")
-  return arch == "amd64"
-end
+newoption {
+    trigger = "disable-examples",
+    description = "disable examples from being included"
+ }
 
-function target_architecture()
-  if _ACTION == "netcore" then
-    return "AnyCPU"
-  end
+newoption {
+  trigger = "configuration",
+  description = "Choose a configuration",
+  default = "Release",
+  allowed = {
+    { "Release",  "Release" },
+    { "Debug",  "Debug" },
+ }
+}
 
-  -- Default to 32-bit on Windows and Mono architecture otherwise.
-  if explicit_target_architecture ~= nil then
-    return explicit_target_architecture
-  end
-  if os.ishost("windows") then return "x86" end
-  return is_64_bits_mono_runtime() and "x64" or "x86"
-end
-
-if not _OPTIONS["arch"] then
-  _OPTIONS["arch"] = target_architecture()
-end
-
--- Uncomment to enable Roslyn compiler.
---[[
-premake.override(premake.tools.dotnet, "gettoolname", function(base, cfg, tool)
-  if tool == "csc" then
-    return "csc"
-  end
-  return base(cfg, tool)
-end)
-]]
-
-basedir = path.getdirectory(_PREMAKE_COMMAND)
-premake.path = premake.path .. ";" .. path.join(basedir, "modules")
-
-depsdir = path.getabsolute("../deps");
-srcdir = path.getabsolute("../src");
-incdir = path.getabsolute("../include");
-bindir = path.getabsolute("../bin");
-examplesdir = path.getabsolute("../examples");
-testsdir = path.getabsolute("../tests");
-
-builddir = path.getabsolute("./" .. _ACTION);
-if _ARGS[1] then
-    builddir = path.getabsolute("./" .. _ARGS[1]);
-end
-
-if _ACTION ~= "netcore" then
-  objsdir = path.join(builddir, "obj", "%{cfg.buildcfg}_%{cfg.platform}");
-  libdir = path.join(builddir, "lib", "%{cfg.buildcfg}_%{cfg.platform}");
-else
-  objsdir = path.join(builddir, "obj", "%{cfg.buildcfg}");
-  libdir = path.join(builddir, "lib", "%{cfg.buildcfg}");
-end
-
+rootdir = path.getabsolute("../")
+srcdir = path.join(rootdir, "src");
+incdir = path.join(rootdir, "include");
+examplesdir = path.join(rootdir, "examples");
+testsdir = path.join(rootdir, "tests");
+builddir = path.join(rootdir, "build")
+bindir = path.join(rootdir, "bin")
+objsdir = path.join(builddir, "obj");
 gendir = path.join(builddir, "gen");
+actionbuilddir = path.join(builddir, _ACTION == "gmake2" and "gmake" or (_ACTION and _ACTION or ""));
+bindircfg = path.join(bindir, "%{cfg.buildcfg}_%{cfg.platform}");
+prjobjdir = path.join(objsdir, "%{prj.name}", "%{cfg.buildcfg}")
 
-msvc_buildflags = { "/wd4267" }
-
+msvc_buildflags = { "/MP", "/wd4267" }
 msvc_cpp_defines = { }
-
+default_gcc_version = "9.0.0"
 generate_build_config = true
+premake.path = premake.path .. ";" .. path.join(builddir, "modules")
 
 function string.starts(str, start)
    if str == nil then return end
@@ -90,19 +66,24 @@ function SafePath(path)
   return "\"" .. path .. "\""
 end
 
+function target_architecture()
+  return _OPTIONS["arch"]
+end
+
 function SetupNativeProject()
-  location ("%{wks.location}/projects")
+  location (path.join(actionbuilddir, "projects"))
+  files { "*.lua" }
 
   filter { "configurations:Debug" }
     defines { "DEBUG" }
-    
+
   filter { "configurations:Release" }
     defines { "NDEBUG" }
     optimize "On"
-    
+
   -- Compiler-specific options
-  
-  filter { "action:vs*" }
+
+  filter { "toolset:msc*" }
     buildoptions { msvc_buildflags }
     defines { msvc_cpp_defines }
 
@@ -113,12 +94,15 @@ function SetupNativeProject()
   filter { "toolset:clang", "system:not macosx" }
     linkoptions { "-fuse-ld=/usr/bin/ld.lld" }
 
-  filter { "system:macosx", "language:C++" }
+  filter { "toolset:clang" }
+    buildoptions { "-fstandalone-debug" }
+
+  filter { "toolset:clang", "language:C++", "system:macosx" }
     buildoptions { gcc_buildflags, "-stdlib=libc++" }
     links { "c++" }
 
-  filter { "system:not windows", "language:C++" }
-    cppdialect "C++11"
+  filter { "toolset:not msc*", "language:C++" }
+    cppdialect "C++14"
     buildoptions { "-fpermissive" }
   
   -- OS-specific options
@@ -127,7 +111,7 @@ function SetupNativeProject()
     defines { "WIN32", "_WINDOWS" }
   
   -- For context: https://github.com/premake/premake-core/issues/935
-  filter {"system:windows", "action:vs*"}
+  filter {"system:windows", "toolset:msc*"}
     systemversion("latest")
 
   filter {}
@@ -135,26 +119,7 @@ end
 
 function SetupManagedProject()
   language "C#"
-  location ("%{wks.location}/projects")
-  buildoptions {"/platform:".._OPTIONS["arch"]}
-
-  dotnetframework "4.6"
-
-  if not os.istarget("macosx") then
-    filter { "action:vs* or netcore" }
-      location "."
-    filter {}
-  end
-
-  filter { "action:netcore" }
-    dotnetframework "netstandard2.0"
-
-  filter { "action:vs2013" }
-    dotnetframework "4.5"
-
-  filter { "action:vs2012" }
-    dotnetframework "4.5"
-
+  location "."
   filter {}
 end
 
@@ -168,7 +133,7 @@ function IncludeDir(dir)
     if os.isfile(fp) then
       include(dep)
       return
-    end    
+    end
 
     fp = path.join(dep, "premake4.lua")
     fp = path.join(os.getcwd(), fp)
@@ -205,8 +170,9 @@ function StaticLinksOpt(libnames)
 end
 
 function UseClang()
-  local compiler = os.getenv("CXX") or ""
-  return string.match(compiler, "clang")
+  local cc = _OPTIONS.cc or ""
+  local env = os.getenv("CXX") or ""
+  return string.match(cc, "clang") or string.match(env, "clang")
 end
 
 function GccVersion()
@@ -215,28 +181,52 @@ function GccVersion()
     compiler = "gcc"
   end
   local out = os.outputof(compiler.." -v")
-  local version = string.match(out, "gcc version [0-9\\.]+")
-  if version == nil then
-    version = string.match(out, "clang version [0-9\\.]+")
+  if out == nil then
+    return default_gcc_version
   end
-  return string.sub(version, 13)
+  local version = string.match(out, "gcc[ -][Vv]ersion [0-9\\.]+")
+  if version ~= nil then
+    return string.sub(version, 13)
+  end
+  version = string.match(out, "clang[ -][Vv]ersion [0-9\\.]+")
+  return string.sub(version, 15)
 end
 
 function UseCxx11ABI()
-  if os.istarget("linux") and GccVersion() >= '4.9.0' and _OPTIONS["no-cxx11-abi"] == nil then
+  if os.istarget("linux") and premake.checkVersion(GccVersion(), '4.9.0') and _OPTIONS["no-cxx11-abi"] == nil then
     return true
   end
   return false
 end
 
 function EnableNativeProjects()
-  if _ACTION == "netcore" then
-    return false
-  end
+  return not (string.starts(_ACTION, "vs") and not os.ishost("windows"))
+end
 
-  if string.starts(_ACTION, "vs") and not os.ishost("windows") then
-    return false
-  end
+function EnabledManagedProjects()
+  return string.starts(_ACTION, "vs")
+end
 
-  return true
+function EnabledCLIProjects()
+  return EnabledManagedProjects() and os.istarget("windows")
+end
+
+function AddPlatformSpecificFiles(folder, filename)
+
+  if os.istarget("windows") then
+    filter { "toolset:msc*", "architecture:x86_64" }
+      files { path.join(folder, "x86_64-pc-win32-msvc", filename) }
+    filter { "toolset:msc*", "architecture:x86" }
+      files { path.join(folder, "i686-pc-win32-msvc", filename) }
+  elseif os.istarget("macosx") then
+    filter { "architecture:x86_64" }
+      files { path.join(folder, "x86_64-apple-darwin12.4.0", filename) }
+    filter {"architecture:x86" }
+      files { path.join(folder, "i686-apple-darwin12.4.0", filename) }
+  elseif os.istarget("linux") then
+    filter { "architecture:x86_64" }
+      files { path.join(folder, "x86_64-linux-gnu" .. (UseCxx11ABI() and "-cxx11abi" or ""), filename) }
+  else
+    print "Unknown architecture"
+  end
 end

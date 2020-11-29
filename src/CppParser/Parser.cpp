@@ -11,6 +11,7 @@
 
 #include "Parser.h"
 #include "ELFDumper.h"
+#include "APValuePrinter.h"
 
 #include <llvm/Support/Host.h>
 #include <llvm/Support/Path.h>
@@ -25,6 +26,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/DataLayout.h>
+#include <clang/Basic/Builtins.h>
 #include <clang/Basic/Version.h>
 #include <clang/Config/config.h>
 #include <clang/AST/ASTContext.h>
@@ -83,6 +85,25 @@ LayoutField Parser::WalkVTablePointer(Class* Class,
     LayoutField.name = prefix + "_" + Class->name;
     LayoutField.qualifiedType = GetQualifiedType(c->getASTContext().VoidPtrTy);
     return LayoutField;
+}
+
+static CppAbi GetClassLayoutAbi(clang::TargetCXXABI::Kind abi)
+{
+    switch (abi)
+    {
+    case clang::TargetCXXABI::Microsoft:
+        return CppAbi::Microsoft;
+    case clang::TargetCXXABI::GenericItanium:
+        return CppAbi::Itanium;
+    case clang::TargetCXXABI::GenericARM:
+        return CppAbi::ARM;
+    case clang::TargetCXXABI::iOS:
+        return CppAbi::iOS;
+    case clang::TargetCXXABI::iOS64:
+        return CppAbi::iOS64;
+    default:
+        llvm_unreachable("Unsupported C++ ABI kind");
+    }
 }
 
 void Parser::ReadClassLayout(Class* Class, const clang::RecordDecl* RD,
@@ -190,24 +211,6 @@ void Parser::ReadClassLayout(Class* Class, const clang::RecordDecl* RD,
     }
 }
 
-static std::string GetClangResourceDir(std::string CurrentDir)
-{
-    using namespace llvm;
-    using namespace clang;
-
-    // Compute the path to the resource directory.
-    StringRef ClangResourceDir(CLANG_RESOURCE_DIR);
-    SmallString<128> P(CurrentDir);
-    llvm::sys::path::remove_filename(P);
-    
-    if (ClangResourceDir != "")
-        llvm::sys::path::append(P, ClangResourceDir);
-    else
-        llvm::sys::path::append(P, "lib", "clang", CLANG_VERSION_STRING);
-    
-    return P.str();
-}
-
 //-----------------------------------//
 
 static clang::TargetCXXABI::Kind
@@ -256,17 +259,19 @@ void Parser::Setup()
     c->createDiagnostics();
 
     CompilerInvocation* Inv = new CompilerInvocation();
-    CompilerInvocation::CreateFromArgs(*Inv, args.data(), args.data() + args.size(),
-      c->getDiagnostics());
+    llvm::ArrayRef<const char*> arguments(args.data(), args.data() + args.size());
+    CompilerInvocation::CreateFromArgs(*Inv, arguments, c->getDiagnostics());
     c->setInvocation(std::shared_ptr<CompilerInvocation>(Inv));
     c->getLangOpts() = *Inv->LangOpts;
 
     auto& TO = Inv->TargetOpts;
-    targetABI = ConvertToClangTargetCXXABI(opts->abi);
 
     if (opts->targetTriple.empty())
         opts->targetTriple = llvm::sys::getDefaultTargetTriple();
     TO->Triple = llvm::Triple::normalize(opts->targetTriple);
+
+    if (opts->verbose)
+        printf("Target triple: %s\n", TO->Triple.c_str());
 
     TargetInfo* TI = TargetInfo::CreateTargetInfo(c->getDiagnostics(), TO);
     if (!TI)
@@ -300,16 +305,6 @@ void Parser::Setup()
 
     if (opts->verbose)
         HSOpts.Verbose = true;
-
-#ifndef __APPLE__
-    // Initialize the default platform headers.
-    HSOpts.ResourceDir = GetClangResourceDir(opts->currentDir);
-
-    llvm::SmallString<128> ResourceDir(HSOpts.ResourceDir);
-    llvm::sys::path::append(ResourceDir, "include");
-    HSOpts.AddPath(ResourceDir.str(), clang::frontend::System, /*IsFramework=*/false,
-        /*IgnoreSysRoot=*/false);
-#endif
 
     for (unsigned I = 0, E = opts->IncludeDirs.size(); I != E; ++I)
     {
@@ -348,18 +343,10 @@ void Parser::Setup()
     clang::driver::ToolChain *TC = nullptr;
     llvm::Triple Target(TO->Triple);
 
-    switch (Target.getOS()) {
-    case llvm::Triple::Linux:
-      TC = new clang::driver::toolchains::Linux(D, Target, Args);
-      break;
-    case llvm::Triple::Win32:
-        switch (Target.getEnvironment()) {
-        case llvm::Triple::MSVC:
-            TC = new clang::driver::toolchains::MSVCToolChain(D, Target, Args);
-            break;
-        }
-        break;
-    }
+    if (Target.getOS() == llvm::Triple::Linux)
+        TC = new clang::driver::toolchains::Linux(D, Target, Args);
+    else if (Target.getEnvironment() == llvm::Triple::EnvironmentType::MSVC)
+        TC = new clang::driver::toolchains::MSVCToolChain(D, Target, Args);
 
     if (TC && !opts->noStandardIncludes) {
         llvm::opt::ArgStringList Includes;
@@ -371,6 +358,9 @@ void Parser::Setup()
                     /*IgnoreSysRoot=*/false);
         }
     }
+
+    if (TC)
+        delete TC;
 
     // Enable preprocessing record.
     PPOpts.DetailedRecord = true;
@@ -402,6 +392,7 @@ std::string Parser::GetDeclMangledName(const clang::Decl* D)
     std::unique_ptr<MangleContext> MC;
     
     auto& AST = c->getASTContext();
+    auto targetABI = c->getTarget().getCXXABI().getKind();
     switch(targetABI)
     {
     default:
@@ -428,12 +419,14 @@ std::string Parser::GetDeclMangledName(const clang::Decl* D)
     if (!MC->shouldMangleDeclName(ND) || IsDependent)
         return ND->getDeclName().getAsString();
 
+    GlobalDecl GD;
     if (const CXXConstructorDecl *CD = dyn_cast<CXXConstructorDecl>(ND))
-        MC->mangleCXXCtor(CD, Ctor_Base, Out);
+        GD = GlobalDecl(CD, Ctor_Base);
     else if (const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(ND))
-        MC->mangleCXXDtor(DD, Dtor_Base, Out);
+        GD = GlobalDecl(DD, Dtor_Base);
     else
-        MC->mangleName(ND, Out);
+        GD = GlobalDecl(ND);
+    MC->mangleName(GD, Out);
 
     Out.flush();
 
@@ -449,7 +442,7 @@ std::string Parser::GetDeclMangledName(const clang::Decl* D)
 static std::string GetDeclName(const clang::NamedDecl* D)
 {
     if (const clang::IdentifierInfo *II = D->getIdentifier())
-        return II->getName();
+        return II->getName().str();
     return D->getNameAsString();
 }
 
@@ -471,7 +464,7 @@ static std::string GetDeclUSR(const clang::Decl* D)
     using namespace clang;
     SmallString<128> usr;
     if (!index::generateUSRForDecl(D, usr))
-        return usr.str();
+        return usr.str().str();
     return "<invalid>";
 }
 
@@ -695,12 +688,14 @@ void Parser::WalkVTable(const clang::CXXRecordDecl* RD, Class* C)
     if (!C->layout)
         C->layout = new ClassLayout();
 
+    auto targetABI = c->getTarget().getCXXABI().getKind();
+    C->layout->ABI = GetClassLayoutAbi(targetABI);
+
     auto& AST = c->getASTContext();
     switch(targetABI)
     {
     case TargetCXXABI::Microsoft:
     {
-        C->layout->ABI = CppAbi::Microsoft;
         MicrosoftVTableContext VTContext(AST);
 
         const auto& VFPtrs = VTContext.getVFPtrOffsets(RD);
@@ -719,7 +714,6 @@ void Parser::WalkVTable(const clang::CXXRecordDecl* RD, Class* C)
     }
     case TargetCXXABI::GenericItanium:
     {
-        C->layout->ABI = CppAbi::Itanium;
         ItaniumVTableContext VTContext(AST);
 
         auto& VTLayout = VTContext.getVTableLayout(RD);
@@ -890,7 +884,7 @@ bool Parser::HasLayout(const clang::RecordDecl* Record)
         return false;
 
     if (auto CXXRecord = llvm::dyn_cast<clang::CXXRecordDecl>(Record))
-        for (auto Base : CXXRecord->bases())
+        for (const clang::CXXBaseSpecifier& Base : CXXRecord->bases())
         {
             auto CXXBase = GetCXXRecordDeclFromBaseType(Base.getType());
             if (!CXXBase || !HasLayout(CXXBase))
@@ -904,7 +898,7 @@ bool Parser::IsSupported(const clang::NamedDecl* ND)
 {
     return !c->getSourceManager().isInSystemHeader(ND->getBeginLoc()) ||
         (llvm::isa<clang::RecordDecl>(ND) &&
-         supportedStdTypes.find(ND->getName()) != supportedStdTypes.end());
+         supportedStdTypes.find(ND->getName().str()) != supportedStdTypes.end());
 }
 
 bool Parser::IsSupported(const clang::CXXMethodDecl* MD)
@@ -915,10 +909,26 @@ bool Parser::IsSupported(const clang::CXXMethodDecl* MD)
         (isa<CXXConstructorDecl>(MD) && MD->getNumParams() == 0) ||
         isa<CXXDestructorDecl>(MD) ||
         (MD->getDeclName().isIdentifier() &&
-         ((MD->getName() == "c_str" && MD->getNumParams() == 0) ||
-          (MD->getName() == "assign" && MD->getNumParams() == 1)) &&
-         supportedStdTypes.find(MD->getParent()->getName()) !=
+         ((MD->getName() == "data" && MD->getNumParams() == 0 && MD->isConst()) ||
+          (MD->getName() == "assign" && MD->getNumParams() == 1 &&
+           MD->parameters()[0]->getType()->isPointerType())) &&
+         supportedStdTypes.find(MD->getParent()->getName().str()) !=
             supportedStdTypes.end());
+}
+
+static RecordArgABI GetRecordArgABI(
+    clang::CodeGen::CGCXXABI::RecordArgABI argAbi)
+{
+    using namespace clang::CodeGen;
+    switch (argAbi)
+    {
+    case CGCXXABI::RecordArgABI::RAA_DirectInMemory:
+        return RecordArgABI::DirectInMemory;
+    case CGCXXABI::RecordArgABI::RAA_Indirect:
+        return RecordArgABI::Indirect;
+    default:
+        return RecordArgABI::Default;
+    }
 }
 
 void Parser::WalkRecord(const clang::RecordDecl* Record, Class* RC)
@@ -951,12 +961,23 @@ void Parser::WalkRecord(const clang::RecordDecl* Record, Class* RC)
 
     if (hasLayout)
     {
-        const auto& Layout = c->getASTContext().getASTRecordLayout(Record);
         if (!RC->layout)
             RC->layout = new ClassLayout();
+
+        auto targetABI = c->getTarget().getCXXABI().getKind();
+        RC->layout->ABI = GetClassLayoutAbi(targetABI);
+
+        if (auto CXXRD = llvm::dyn_cast_or_null<clang::CXXRecordDecl>(Record))
+        {
+            auto& CXXABI = codeGenTypes->getCXXABI();
+            RC->layout->argABI = GetRecordArgABI(CXXABI.getRecordArgABI(CXXRD));
+        }
+
+        const auto& Layout = c->getASTContext().getASTRecordLayout(Record);
         RC->layout->alignment = (int)Layout.getAlignment().getQuantity();
         RC->layout->size = (int)Layout.getSize().getQuantity();
         RC->layout->dataSize = (int)Layout.getDataSize().getQuantity();
+
         ReadClassLayout(RC, Record, CharUnits(), true);
     }
 
@@ -965,7 +986,7 @@ void Parser::WalkRecord(const clang::RecordDecl* Record, Class* RC)
 
     if (c->getSourceManager().isInSystemHeader(Record->getBeginLoc()))
     {
-        if (supportedStdTypes.find(Record->getName()) != supportedStdTypes.end())
+        if (supportedStdTypes.find(Record->getName().str()) != supportedStdTypes.end())
         {
             for (auto D : Record->decls())
             {
@@ -981,6 +1002,8 @@ void Parser::WalkRecord(const clang::RecordDecl* Record, Class* RC)
                         WalkDeclaration(MD);
                     break;
                 }
+                default:
+                    break;
                 }
             }
         }
@@ -1053,6 +1076,9 @@ void Parser::WalkRecordCXX(const clang::CXXRecordDecl* Record, Class* RC)
     Sema.ForceDeclarationOfImplicitMembers(const_cast<clang::CXXRecordDecl*>(Record));
 
     WalkRecord(Record, RC);
+    
+    if (!Record->hasDefinition())
+        return;
 
     RC->isPOD = Record->isPOD();
     RC->isAbstract = Record->isAbstract();
@@ -1077,7 +1103,7 @@ void Parser::WalkRecordCXX(const clang::CXXRecordDecl* Record, Class* RC)
     }
 
     // Iterate through the record bases.
-    for (auto BS : Record->bases())
+    for (const CXXBaseSpecifier& BS : Record->bases())
     {
         BaseClassSpecifier* Base = new BaseClassSpecifier();
         Base->access = ConvertToAccess(BS.getAccessSpecifier());
@@ -1130,7 +1156,7 @@ struct Diagnostic
 {
     clang::SourceLocation Location;
     llvm::SmallString<100> Message;
-    clang::DiagnosticsEngine::Level Level;
+    clang::DiagnosticsEngine::Level Level = clang::DiagnosticsEngine::Level::Ignored;
 };
 
 struct DiagnosticConsumer : public clang::DiagnosticConsumer
@@ -1160,7 +1186,7 @@ struct DiagnosticConsumer : public clang::DiagnosticConsumer
     }
 
     std::vector<Diagnostic> Diagnostics;
-    clang::Decl* Decl;
+    clang::Decl* Decl = 0;
 };
 
 ClassTemplateSpecialization*
@@ -1180,7 +1206,7 @@ Parser::WalkClassTemplateSpecialization(const clang::ClassTemplateSpecialization
     auto NS = GetNamespace(CTS);
     assert(NS && "Expected a valid namespace");
     TS->_namespace = NS;
-    TS->name = CTS->getName();
+    TS->name = CTS->getName().str();
     TS->templatedDecl = CT;
     TS->specializationKind = WalkTemplateSpecializationKind(CTS->getSpecializationKind());
     CT->Specializations.push_back(TS);
@@ -1235,7 +1261,7 @@ Parser::WalkClassTemplatePartialSpecialization(const clang::ClassTemplatePartial
     auto NS = GetNamespace(CTS);
     assert(NS && "Expected a valid namespace");
     TS->_namespace = NS;
-    TS->name = CTS->getName();
+    TS->name = CTS->getName().str();
     TS->templatedDecl = CT;
     TS->specializationKind = WalkTemplateSpecializationKind(CTS->getSpecializationKind());
     CT->Specializations.push_back(TS);
@@ -1378,6 +1404,16 @@ NonTypeTemplateParameter* Parser::WalkNonTypeTemplateParameter(const clang::NonT
 
 //-----------------------------------//
 
+UnresolvedUsingTypename* Parser::WalkUnresolvedUsingTypename(const clang::UnresolvedUsingTypenameDecl* UUTD)
+{
+    auto UUT = new CppSharp::CppParser::UnresolvedUsingTypename();
+    HandleDeclaration(UUTD, UUT);
+
+    return UUT;
+}
+
+//-----------------------------------//
+
 template<typename TypeLoc>
 std::vector<CppSharp::CppParser::TemplateArgument>
 Parser::WalkTemplateArgumentList(const clang::TemplateArgumentList* TAL,
@@ -1392,7 +1428,7 @@ Parser::WalkTemplateArgumentList(const clang::TemplateArgumentList* TAL,
 
     for (size_t i = 0, e = TAL->size(); i < e; i++)
     {
-        auto TA = TAL->get(i);
+        const clang::TemplateArgument& TA = TAL->get(i);
         TemplateArgumentLoc TArgLoc;
         TemplateArgumentLoc *ArgLoc = 0;
         if (i < typeLocNumArgs && e == typeLocNumArgs)
@@ -1419,7 +1455,7 @@ Parser::WalkTemplateArgumentList(const clang::TemplateArgumentList* TAL,
 
     for (size_t i = 0, e = TAL->size(); i < e; i++)
     {
-        auto TA = TAL->get(i);
+        const clang::TemplateArgument& TA = TAL->get(i);
         if (TALI)
         {
             auto ArgLoc = TALI->operator[](i);
@@ -1439,7 +1475,8 @@ Parser::WalkTemplateArgumentList(const clang::TemplateArgumentList* TAL,
 //-----------------------------------//
 
 CppSharp::CppParser::TemplateArgument
-Parser::WalkTemplateArgument(clang::TemplateArgument TA, clang::TemplateArgumentLoc* ArgLoc)
+Parser::WalkTemplateArgument(const clang::TemplateArgument& TA,
+    clang::TemplateArgumentLoc* ArgLoc)
 {
     auto Arg = CppSharp::CppParser::TemplateArgument();
 
@@ -1509,10 +1546,10 @@ TypeAliasTemplate* Parser::WalkTypeAliasTemplate(
     HandleDeclaration(TD, TA);
 
     TA->name = GetDeclName(TD);
+    NS->Templates.push_back(TA);
+
     TA->TemplatedDecl = WalkDeclaration(TD->getTemplatedDecl());
     TA->Parameters = WalkTemplateParameterList(TD->getTemplateParameters());
-
-    NS->Templates.push_back(TA);
 
     return TA;
 }
@@ -1541,8 +1578,7 @@ FunctionTemplate* Parser::WalkFunctionTemplate(const clang::FunctionTemplateDecl
     if (auto MD = dyn_cast<CXXMethodDecl>(TemplatedDecl))
         Function = WalkMethodCXX(MD);
     else
-        Function = WalkFunction(TemplatedDecl, /*IsDependent=*/true,
-                                            /*AddToNamespace=*/false);
+        Function = WalkFunction(TemplatedDecl);
 
     FT = new FunctionTemplate();
     HandleDeclaration(TD, FT);
@@ -1629,7 +1665,7 @@ Parser::WalkVarTemplateSpecialization(const clang::VarTemplateSpecializationDecl
     auto NS = GetNamespace(VTS);
     assert(NS && "Expected a valid namespace");
     TS->_namespace = NS;
-    TS->name = VTS->getName();
+    TS->name = VTS->getName().str();
     TS->templatedDecl = VT;
     TS->specializationKind = WalkTemplateSpecializationKind(VTS->getSpecializationKind());
     VT->Specializations.push_back(TS);
@@ -1669,7 +1705,7 @@ Parser::WalkVarTemplatePartialSpecialization(const clang::VarTemplatePartialSpec
     auto NS = GetNamespace(VTS);
     assert(NS && "Expected a valid namespace");
     TS->_namespace = NS;
-    TS->name = VTS->getName();
+    TS->name = VTS->getName().str();
     TS->templatedDecl = VT;
     TS->specializationKind = WalkTemplateSpecializationKind(VTS->getSpecializationKind());
     VT->Specializations.push_back(TS);
@@ -1740,9 +1776,14 @@ static CXXOperatorKind GetOperatorKindFromDecl(clang::DeclarationName Name)
 
 Method* Parser::WalkMethodCXX(const clang::CXXMethodDecl* MD)
 {
+    const clang::CXXConstructorDecl* Ctor;
     if (opts->skipPrivateDeclarations &&
         MD->getAccess() == clang::AccessSpecifier::AS_private &&
-        !MD->isVirtual())
+        !MD->isVirtual() &&
+        !MD->isCopyAssignmentOperator() &&
+        !MD->isMoveAssignmentOperator() &&
+        (!(Ctor = llvm::dyn_cast<clang::CXXConstructorDecl>(MD)) ||
+         (!Ctor->isDefaultConstructor() && !Ctor->isCopyOrMoveConstructor())))
         return nullptr;
 
     using namespace clang;
@@ -1840,7 +1881,7 @@ Field* Parser::WalkFieldCXX(const clang::FieldDecl* FD, Class* Class)
     HandleDeclaration(FD, F);
 
     F->_namespace = Class;
-    F->name = FD->getName();
+    F->name = FD->getName().str();
     auto TL = FD->getTypeSourceInfo()->getTypeLoc();
     F->qualifiedType = GetQualifiedType(FD->getType(), &TL);
     F->access = ConvertToAccess(FD->getAccess());
@@ -1848,6 +1889,9 @@ Field* Parser::WalkFieldCXX(const clang::FieldDecl* FD, Class* Class)
     F->isBitField = FD->isBitField();
     if (F->isBitField && !F->isDependent && !FD->getBitWidth()->isInstantiationDependent())
         F->bitWidth = FD->getBitWidthValue(c->getASTContext());
+ 
+    if (auto alignedAttr = FD->getAttr<clang::AlignedAttr>())
+        F->alignAs = GetAlignAs(alignedAttr);
 
     Class->Fields.push_back(F);
 
@@ -1889,7 +1933,7 @@ TranslationUnit* Parser::GetTranslationUnit(clang::SourceLocation Loc,
     if (Kind)
         *Kind = LocKind;
 
-    auto Unit = opts->ASTContext->FindOrCreateModule(File);
+    auto Unit = opts->ASTContext->FindOrCreateModule(File.str());
 
     Unit->originalPtr = (void*) Unit;
     assert(Unit->originalPtr != nullptr);
@@ -1950,7 +1994,7 @@ DeclarationContext* Parser::GetNamespace(const clang::Decl* D,
             if (ND->isAnonymousNamespace())
                 continue;
             auto Name = ND->getName();
-            DC = DC->FindCreateNamespace(Name);
+            DC = DC->FindCreateNamespace(Name.str());
             ((Namespace*)DC)->isAnonymous = ND->isAnonymousNamespace();
             ((Namespace*)DC)->isInline = ND->isInline();
             HandleDeclaration(ND, DC);
@@ -2375,6 +2419,20 @@ Type* Parser::WalkType(clang::QualType QualType, const clang::TypeLoc* TL,
         Ty = A;
         break;
     }
+    case clang::Type::UnresolvedUsing:
+    {
+        auto UT = Type->getAs<clang::UnresolvedUsingType>();
+
+        TypeLoc Next;
+        if (LocValid) Next = TL->getNextTypeLoc();
+
+        auto U = new UnresolvedUsingType();
+        U->declaration = static_cast<UnresolvedUsingTypename*>(
+            WalkDeclaration(UT->getDecl()));
+
+        Ty = U;
+        break;
+    }
     case clang::Type::FunctionNoProto:
     {
         auto FP = Type->getAs<clang::FunctionNoProtoType>();
@@ -2582,7 +2640,7 @@ Type* Parser::WalkType(clang::QualType QualType, const clang::TypeLoc* TL,
         auto TPT = new CppSharp::CppParser::TemplateParameterType();
 
         if (auto Ident = TP->getIdentifier())
-            TPT->parameter->name = Ident->getName();
+            TPT->parameter->name = Ident->getName().str();
 
         TypeLoc UTL, ETL, ITL, Next;
 
@@ -2683,7 +2741,7 @@ Type* Parser::WalkType(clang::QualType QualType, const clang::TypeLoc* TL,
         }
         default: break;
         }
-        DNT->identifier = DN->getIdentifier()->getName();
+        DNT->identifier = DN->getIdentifier()->getName().str();
 
         Ty = DNT;
         break;
@@ -2724,8 +2782,14 @@ Type* Parser::WalkType(clang::QualType QualType, const clang::TypeLoc* TL,
     {
         auto UT = Type->getAs<clang::UnaryTransformType>();
 
+        TypeLoc Loc;
+        if (LocValid)
+        {
+            clang::TypeSourceInfo* TSI = TL->getAs<UnaryTransformTypeLoc>().getUnderlyingTInfo();
+            Loc = TSI->getTypeLoc();
+        }
+
         auto UTT = new UnaryTransformType();
-        auto Loc = TL->getAs<UnaryTransformTypeLoc>().getUnderlyingTInfo()->getTypeLoc();
         UTT->desugared = GetQualifiedType(UT->isSugared() ? UT->getCanonicalTypeInternal() : UT->getBaseType(), &Loc);
         UTT->baseType = GetQualifiedType(UT->getBaseType(), &Loc);
 
@@ -2762,6 +2826,12 @@ Type* Parser::WalkType(clang::QualType QualType, const clang::TypeLoc* TL,
     {
         auto DT = Type->getAs<clang::DecltypeType>();
         Ty = WalkType(DT->getUnderlyingType(), TL);
+        break;
+    }
+    case clang::Type::MacroQualified:
+    {
+        auto MT = Type->getAs<clang::MacroQualifiedType>();
+        Ty = WalkType(MT->getUnderlyingType(), TL);
         break;
     }
     default:
@@ -2871,14 +2941,9 @@ Enumeration::Item* Parser::WalkEnumItem(clang::EnumConstantDecl* ECD)
 static const clang::CodeGen::CGFunctionInfo& GetCodeGenFunctionInfo(
     clang::CodeGen::CodeGenTypes* CodeGenTypes, const clang::FunctionDecl* FD)
 {
-    using namespace clang;
-    if (auto CD = dyn_cast<clang::CXXConstructorDecl>(FD)) {
-        return CodeGenTypes->arrangeCXXStructorDeclaration(CD, clang::CodeGen::StructorType::Base);
-    } else if (auto DD = dyn_cast<clang::CXXDestructorDecl>(FD)) {
-        return CodeGenTypes->arrangeCXXStructorDeclaration(DD, clang::CodeGen::StructorType::Base);
-    }
-
-    return CodeGenTypes->arrangeFunctionDeclaration(FD);
+    auto FTy = FD->getType()->getCanonicalTypeUnqualified();
+    return CodeGenTypes->arrangeFreeFunctionType(
+        FTy.castAs<clang::FunctionProtoType>());
 }
 
 bool Parser::CanCheckCodeGenInfo(clang::Sema& S, const clang::Type* Ty)
@@ -2889,8 +2954,28 @@ bool Parser::CanCheckCodeGenInfo(clang::Sema& S, const clang::Type* Ty)
         FinalType->isInstantiationDependentType() || FinalType->isUndeducedType())
         return false;
 
+    if (FinalType->isFunctionType())
+    {
+        auto FTy = FinalType->getAs<clang::FunctionType>();
+        auto CanCheck = CanCheckCodeGenInfo(S, FTy->getReturnType().getTypePtr());
+        if (!CanCheck)
+            return false;
+
+        if (FinalType->isFunctionProtoType())
+        {
+            auto FPTy = FinalType->getAs<clang::FunctionProtoType>();
+            for (const auto& ParamType : FPTy->getParamTypes())
+            {
+                auto CanCheck = CanCheckCodeGenInfo(S, ParamType.getTypePtr());
+                if (!CanCheck)
+                    return false;
+            }
+        }
+    }
+
     if (auto RT = FinalType->getAs<clang::RecordType>())
-        return HasLayout(RT->getDecl());
+        if (!HasLayout(RT->getDecl()))
+            return false;
 
     // Lock in the MS inheritance model if we have a member pointer to a class,
     // else we get an assertion error inside Clang's codegen machinery.
@@ -2943,13 +3028,23 @@ void Parser::CompleteIfSpecializationType(const clang::QualType& QualType)
 
     auto existingClient = c->getSema().getDiagnostics().getClient();
     std::unique_ptr<::DiagnosticConsumer> SemaDiagnostics(new ::DiagnosticConsumer());
-    SemaDiagnostics-> Decl = CTS;
+    SemaDiagnostics->Decl = CTS;
     c->getSema().getDiagnostics().setClient(SemaDiagnostics.get(), false);
 
     c->getSema().InstantiateClassTemplateSpecialization(CTS->getBeginLoc(),
         CTS, TSK_ImplicitInstantiation, false);
 
     c->getSema().getDiagnostics().setClient(existingClient, false);
+
+    auto CT = WalkClassTemplate(CTS->getSpecializedTemplate());
+    auto USR = GetDeclUSR(CTS);
+    auto TS = CT->FindSpecialization(USR);
+    if (TS != nullptr && TS->isIncomplete)
+    {
+        TS->isIncomplete = false;
+        TS->specializationKind = WalkTemplateSpecializationKind(CTS->getSpecializationKind());
+        WalkRecordCXX(CTS, TS);
+    }
 }
 
 Parameter* Parser::WalkParameter(const clang::ParmVarDecl* PVD,
@@ -3028,6 +3123,8 @@ static bool IsInvalid(clang::Stmt* Body, std::unordered_set<clang::Stmt*>& Bodie
     case clang::Stmt::StmtClass::MemberExprClass:
         D = cast<clang::MemberExpr>(Body)->getMemberDecl();
         break;
+    default:
+        break;
     }
     if (D)
     {
@@ -3072,9 +3169,7 @@ void Parser::MarkValidity(Function* F)
 
     auto FD = static_cast<FunctionDecl*>(F->originalPtr);
 
-    if (!FD->getTemplateInstantiationPattern() ||
-        !FD->isExternallyVisible() ||
-        c->getSourceManager().isInSystemHeader(FD->getBeginLoc()))
+    if (!FD->getTemplateInstantiationPattern() || !FD->isExternallyVisible())
         return;
 
     auto existingClient = c->getSema().getDiagnostics().getClient();
@@ -3098,12 +3193,11 @@ void Parser::MarkValidity(Function* F)
     c->getSema().getDiagnostics().setClient(existingClient, false);
 }
 
-void Parser::WalkFunction(const clang::FunctionDecl* FD, Function* F,
-                          bool IsDependent)
+void Parser::WalkFunction(const clang::FunctionDecl* FD, Function* F)
 {
     using namespace clang;
 
-    assert (FD->getBuiltinID() == 0);
+    assert(FD->getBuiltinID() == 0);
     auto FT = FD->getType()->getAs<clang::FunctionType>();
 
     auto NS = GetNamespace(FD);
@@ -3147,12 +3241,11 @@ void Parser::WalkFunction(const clang::FunctionDecl* FD, Function* F,
             HandlePreprocessedEntities(F, FTL.getParensRange(), MacroLocation::FunctionParameters);
         }
     }
-    
+
     auto ReturnType = FD->getReturnType();
     if (FD->isExternallyVisible())
         CompleteIfSpecializationType(ReturnType);
     F->returnType = GetQualifiedType(ReturnType, &RTL);
-    F->qualifiedType = GetQualifiedType(FD->getType(), &FTL);
 
     const auto& Mangled = GetDeclMangledName(FD);
     F->mangled = Mangled;
@@ -3173,7 +3266,7 @@ void Parser::WalkFunction(const clang::FunctionDecl* FD, Function* F,
         if (FTL)
         {
             auto FTInfo = FTL.castAs<FunctionTypeLoc>();
-            assert (!FTInfo.isNull());
+            assert(!FTInfo.isNull());
 
             ParamStartLoc = FTInfo.getLParenLoc();
             ResultLoc = FTInfo.getReturnLoc().getBeginLoc();
@@ -3221,40 +3314,34 @@ void Parser::WalkFunction(const clang::FunctionDecl* FD, Function* F,
     if (auto FTSI = FD->getTemplateSpecializationInfo())
         F->specializationInfo = WalkFunctionTemplateSpec(FTSI, F);
 
-    if (FD->isDependentContext())
-        return;
-
     const CXXMethodDecl* MD;
-    if ((MD = dyn_cast<CXXMethodDecl>(FD)) && !MD->isStatic() &&
-        !HasLayout(cast<CXXRecordDecl>(MD->getDeclContext())))
+    if (FD->isDependentContext() ||
+        ((MD = dyn_cast<CXXMethodDecl>(FD)) && !MD->isStatic() &&
+            !HasLayout(cast<CXXRecordDecl>(MD->getDeclContext()))) ||
+        !CanCheckCodeGenInfo(c->getSema(), FD->getReturnType().getTypePtr()) ||
+        std::any_of(FD->parameters().begin(), FD->parameters().end(),
+            [this](auto* P) { return !CanCheckCodeGenInfo(c->getSema(), P->getType().getTypePtr()); }))
+    {
+        F->qualifiedType = GetQualifiedType(FD->getType(), &FTL);
         return;
+    }
 
-    if (!CanCheckCodeGenInfo(c->getSema(), FD->getReturnType().getTypePtr()))
-        return;
-
-    for (const auto& P : FD->parameters())
-        if (!CanCheckCodeGenInfo(c->getSema(), P->getType().getTypePtr()))
-            return;
-
-    auto& CGInfo = GetCodeGenFunctionInfo(codeGenTypes, FD);
-    F->isReturnIndirect = CGInfo.getReturnInfo().isIndirect();
+    auto& CGInfo = GetCodeGenFunctionInfo(codeGenTypes.get(), FD);
+    F->isReturnIndirect = CGInfo.getReturnInfo().isIndirect() ||
+        CGInfo.getReturnInfo().isInAlloca();
 
     unsigned Index = 0;
-    for (auto I = CGInfo.arg_begin(), E = CGInfo.arg_end(); I != E; I++)
+    for (const auto& Arg : CGInfo.arguments())
     {
-        // Skip the first argument as it's the return type.
-        if (I == CGInfo.arg_begin())
-            continue;
-        if (Index >= F->Parameters.size())
-            continue;
-        F->Parameters[Index++]->isIndirect = I->info.isIndirect();
+        F->Parameters[Index++]->isIndirect =
+            Arg.info.isIndirect() && !Arg.info.getIndirectByVal();
     }
 
     MarkValidity(F);
+    F->qualifiedType = GetQualifiedType(FD->getType(), &FTL);
 }
 
-Function* Parser::WalkFunction(const clang::FunctionDecl* FD, bool IsDependent,
-                                     bool AddToNamespace)
+Function* Parser::WalkFunction(const clang::FunctionDecl* FD)
 {
     using namespace clang;
 
@@ -3270,11 +3357,8 @@ Function* Parser::WalkFunction(const clang::FunctionDecl* FD, bool IsDependent,
 
     F = new Function();
     HandleDeclaration(FD, F);
-
-    if (AddToNamespace)
-        NS->Functions.push_back(F);
-
-    WalkFunction(FD, F, IsDependent);
+    NS->Functions.push_back(F);
+    WalkFunction(FD, F);
 
     return F;
 }
@@ -3330,8 +3414,13 @@ void Parser::WalkVariable(const clang::VarDecl* VD, Variable* Var)
 {
     HandleDeclaration(VD, Var);
 
-    Var->name = VD->getName();
+    Var->isConstExpr = VD->isConstexpr();
+    Var->name = VD->getName().str();
     Var->access = ConvertToAccess(VD->getAccess());
+
+    auto Init = VD->getAnyInitializer();
+    Var->initializer = (Init && !Init->getType()->isDependentType()) ?
+        WalkVariableInitializerExpression(Init) : nullptr;
 
     auto TL = VD->getTypeSourceInfo()->getTypeLoc();
     Var->qualifiedType = GetQualifiedType(VD->getType(), &TL);
@@ -3403,7 +3492,7 @@ bool Parser::GetDeclText(clang::SourceRange SR, std::string& Text)
     auto Range = CharSourceRange::getTokenRange(SR);
 
     bool Invalid;
-    Text = Lexer::getSourceText(Range, SM, LangOpts, &Invalid);
+    Text = Lexer::getSourceText(Range, SM, LangOpts, &Invalid).str();
 
     return !Invalid && !Text.empty();
 }
@@ -3455,7 +3544,7 @@ PreprocessedEntity* Parser::WalkPreprocessedEntity(
 
         MacroInfo* MI = P.getMacroInfo((IdentifierInfo*)II);
 
-        if (!MI || MI->isBuiltinMacro() || MI->isFunctionLike())
+        if (!MI || MI->isBuiltinMacro())
             break;
 
         clang::SourceManager& SM = c->getSourceManager();
@@ -3484,8 +3573,8 @@ PreprocessedEntity* Parser::WalkPreprocessedEntity(
         Definition->lineNumberEnd = SM.getExpansionLineNumber(MD->getLocation());
         Entity = Definition;
 
-        Definition->name = II->getName().trim();
-        Definition->expression = Expression.trim();
+        Definition->name = II->getName().trim().str();
+        Definition->expression = Expression.trim().str();
     }
     case clang::PreprocessedEntity::InclusionDirectiveKind:
         // nothing to be done for InclusionDirectiveKind
@@ -3575,7 +3664,7 @@ AST::ExpressionObsolete* Parser::WalkExpressionObsolete(const clang::Expr* Expr)
             auto TemporaryExpr = dyn_cast<clang::MaterializeTemporaryExpr>(Arg);
             if (TemporaryExpr)
             {
-                auto SubTemporaryExpr = TemporaryExpr->GetTemporaryExpr();
+                auto SubTemporaryExpr = TemporaryExpr->getSubExpr();
                 auto Cast = dyn_cast<clang::CastExpr>(SubTemporaryExpr);
                 if (!Cast ||
                     (Cast->getSubExprAsWritten()->getStmtClass() != clang::Stmt::IntegerLiteralClass &&
@@ -3598,19 +3687,96 @@ AST::ExpressionObsolete* Parser::WalkExpressionObsolete(const clang::Expr* Expr)
     case clang::Stmt::CXXDefaultArgExprClass:
         return WalkExpressionObsolete(cast<clang::CXXDefaultArgExpr>(Expr)->getExpr());
     case clang::Stmt::MaterializeTemporaryExprClass:
-        return WalkExpressionObsolete(cast<clang::MaterializeTemporaryExpr>(Expr)->GetTemporaryExpr());
+        return WalkExpressionObsolete(cast<clang::MaterializeTemporaryExpr>(Expr)->getSubExpr());
     default:
         break;
     }
 
-    clang::Expr::EvalResult integer;
-    if (Expr->getStmtClass() != clang::Stmt::CharacterLiteralClass &&
-        Expr->getStmtClass() != clang::Stmt::CXXBoolLiteralExprClass &&
-        Expr->getStmtClass() != clang::Stmt::UnaryExprOrTypeTraitExprClass &&
-        !Expr->isValueDependent() &&
-        Expr->EvaluateAsInt(integer, c->getASTContext()))
-        return new AST::ExpressionObsolete(integer.Val.getInt().toString(10));
+    if (!Expr->isValueDependent())
+    {
+        clang::Expr::EvalResult integer;
+        if (Expr->getStmtClass() == clang::Stmt::CharacterLiteralClass)
+        {
+            auto result = GetStringFromStatement(Expr);
+            if (!result.empty() && 
+                result.front() != '\'' && 
+                Expr->EvaluateAsInt(integer, c->getASTContext()))
+            {
+                result = integer.Val.getInt().toString(10);
+            }
+
+            return new AST::ExpressionObsolete(result);
+        }
+        else if (Expr->getStmtClass() != clang::Stmt::CXXBoolLiteralExprClass &&
+            Expr->getStmtClass() != clang::Stmt::UnaryExprOrTypeTraitExprClass &&
+            Expr->EvaluateAsInt(integer, c->getASTContext())
+            )
+        {
+            return new AST::ExpressionObsolete(integer.Val.getInt().toString(10));
+        }
+    }
+
     return new AST::ExpressionObsolete(GetStringFromStatement(Expr));
+}
+
+AST::ExpressionObsolete* Parser::WalkVariableInitializerExpression(const clang::Expr* Expr)
+{
+    using namespace clang;
+
+    if (IsCastStmt(Expr->getStmtClass()))
+        return WalkVariableInitializerExpression(cast<clang::CastExpr>(Expr)->getSubExprAsWritten());
+
+    if (IsLiteralStmt(Expr->getStmtClass()))
+      return WalkExpressionObsolete(Expr);
+
+    clang::Expr::EvalResult result;
+    if (Expr->EvaluateAsConstantExpr(result, clang::Expr::ConstExprUsage::EvaluateForCodeGen, c->getASTContext(), false))
+    {
+        std::string s;
+        llvm::raw_string_ostream out(s);
+        APValuePrinter printer{c->getASTContext(), out};
+
+        if (printer.Print(result.Val, Expr->getType()))
+            return new AST::ExpressionObsolete(out.str());
+    }
+    
+    return WalkExpressionObsolete(Expr);
+}
+
+bool Parser::IsCastStmt(clang::Stmt::StmtClass stmt) 
+{
+    switch (stmt)
+    {
+    case clang::Stmt::CStyleCastExprClass:
+    case clang::Stmt::CXXConstCastExprClass:
+    case clang::Stmt::CXXDynamicCastExprClass:
+    case clang::Stmt::CXXFunctionalCastExprClass:
+    case clang::Stmt::CXXReinterpretCastExprClass:
+    case clang::Stmt::CXXStaticCastExprClass:
+    case clang::Stmt::ImplicitCastExprClass:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool Parser::IsLiteralStmt(clang::Stmt::StmtClass stmt) 
+{
+    switch (stmt)
+    {
+    case clang::Stmt::CharacterLiteralClass:
+    case clang::Stmt::FixedPointLiteralClass:
+    case clang::Stmt::FloatingLiteralClass:
+    case clang::Stmt::IntegerLiteralClass:
+    case clang::Stmt::StringLiteralClass:
+    case clang::Stmt::ImaginaryLiteralClass:
+    case clang::Stmt::UserDefinedLiteralClass:
+    case clang::Stmt::CXXNullPtrLiteralExprClass:
+    case clang::Stmt::CXXBoolLiteralExprClass:
+        return true;
+    default:
+        return false;
+    }
 }
 
 std::string Parser::GetStringFromStatement(const clang::Stmt* Statement)
@@ -3677,7 +3843,7 @@ void Parser::HandleOriginalText(const clang::Decl* D, Declaration* Decl)
     auto DeclText = clang::Lexer::getSourceText(Range, SM, LangOpts, &Invalid);
     
     if (!Invalid)
-        Decl->debugText = DeclText;
+        Decl->debugText = DeclText.str();
 }
 
 void Parser::HandleDeclaration(const clang::Decl* D, Declaration* Decl)
@@ -3991,6 +4157,12 @@ Declaration* Parser::WalkDeclaration(const clang::Decl* D)
         Decl = WalkNonTypeTemplateParameter(NTTPD);
         break;
     }
+    case Decl::UnresolvedUsingTypename:
+    {
+        auto UUTD = cast<UnresolvedUsingTypenameDecl>(D);
+        Decl = WalkUnresolvedUsingTypename(UUTD);
+        break;
+    }
     case Decl::BuiltinTemplate:
     case Decl::ClassScopeFunctionSpecialization:
     case Decl::PragmaComment:
@@ -4001,7 +4173,6 @@ Declaration* Parser::WalkDeclaration(const clang::Decl* D)
     case Decl::UsingDirective:
     case Decl::UsingShadow:
     case Decl::ConstructorUsingShadow:
-    case Decl::UnresolvedUsingTypename:
     case Decl::UnresolvedUsingValue:
     case Decl::IndirectField:
     case Decl::StaticAssert:
@@ -4026,15 +4197,39 @@ Declaration* Parser::WalkDeclaration(const clang::Decl* D)
         for (auto it = D->attr_begin(); it != D->attr_end(); ++it)
         {
             Attr* Attr = (*it);
-            if (Attr->getKind() == clang::attr::Kind::MaxFieldAlignment)
+            switch(Attr->getKind())
             {
-                auto MFA = cast<clang::MaxFieldAlignmentAttr>(Attr);
-                Decl->maxFieldAlignment = MFA->getAlignment() / 8; // bits to bytes.
+                case clang::attr::Kind::MaxFieldAlignment:
+                {
+                    auto MFA = cast<clang::MaxFieldAlignmentAttr>(Attr);
+                    Decl->maxFieldAlignment = MFA->getAlignment() / 8; // bits to bytes.
+                    break;
+                }
+                case clang::attr::Kind::Deprecated:
+                {
+                    auto DA = cast<clang::DeprecatedAttr>(Attr);
+                    Decl->isDeprecated = true;
+                    break;
+                }
+                case clang::attr::Kind::Aligned:
+                    Decl->alignAs = GetAlignAs(cast<clang::AlignedAttr>(Attr));
+                    break;
+                default:
+                    break;
             }
         }
     }
 
     return Decl;
+}
+
+int Parser::GetAlignAs(const clang::AlignedAttr* alignedAttr)
+{
+    return alignedAttr->isAlignas() &&
+        !alignedAttr->isAlignmentErrorDependent() &&
+        !alignedAttr->isAlignmentDependent()
+        ? alignedAttr->getAlignment(c->getASTContext())
+        : 0;
 }
 
 void Parser::HandleDiagnostics(ParserResult* res)
@@ -4051,7 +4246,7 @@ void Parser::HandleDiagnostics(ParserResult* res)
 
         auto PDiag = ParserDiagnostic();
         PDiag.fileName = FileName.str();
-        PDiag.message = Diag.Message.str();
+        PDiag.message = Diag.Message.str().str();
         PDiag.lineNumber = 0;
         PDiag.columnNumber = 0;
 
@@ -4102,9 +4297,7 @@ void Parser::SetupLLVMCodegen()
         c->getHeaderSearchOpts(), c->getPreprocessorOpts(),
         c->getCodeGenOpts(), *LLVMModule, c->getDiagnostics()));
 
-    CGT.reset(new clang::CodeGen::CodeGenTypes(*CGM.get()));
-
-    codeGenTypes = CGT.get();
+    codeGenTypes.reset(new clang::CodeGen::CodeGenTypes(*CGM.get()));
 }
 
 bool Parser::SetupSourceFiles(const std::vector<std::string>& SourceFiles,
@@ -4120,12 +4313,12 @@ bool Parser::SetupSourceFiles(const std::vector<std::string>& SourceFiles,
     {
         auto FileEntry = c->getPreprocessor().getHeaderSearchInfo().LookupFile(SourceFile,
             clang::SourceLocation(), /*isAngled*/true,
-            nullptr, Dir, Includers, nullptr, nullptr, nullptr, nullptr, nullptr);
+            nullptr, Dir, Includers, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
         if (!FileEntry)
             return false;
 
-        FileEntries.push_back(FileEntry);
+        FileEntries.push_back(&FileEntry.getPointer()->getFileEntry());
     }
 
     // Create a virtual file that includes the header. This gets rid of some
@@ -4159,7 +4352,7 @@ void SemaConsumer::HandleTranslationUnit(clang::ASTContext& Ctx)
 {
     auto FileEntry = FileEntries[0];
     auto FileName = FileEntry->getName();
-    auto Unit = Parser.opts->ASTContext->FindOrCreateModule(FileName);
+    auto Unit = Parser.opts->ASTContext->FindOrCreateModule(FileName.str());
 
     auto TU = Ctx.getTranslationUnitDecl();
     Parser.HandleDeclaration(TU, Unit);
@@ -4170,7 +4363,7 @@ void SemaConsumer::HandleTranslationUnit(clang::ASTContext& Ctx)
     Parser.WalkAST(TU);
 }
 
-ParserResult* Parser::ParseHeader(const std::vector<std::string>& SourceFiles)
+ParserResult* Parser::Parse(const std::vector<std::string>& SourceFiles)
 {
     assert(opts->ASTContext && "Expected a valid ASTContext");
 
@@ -4220,19 +4413,19 @@ ParserResult* Parser::ParseHeader(const std::vector<std::string>& SourceFiles)
     return res;
  }
 
-ParserResultKind Parser::ParseArchive(llvm::StringRef File,
+ParserResultKind Parser::ParseArchive(const std::string& File,
                                       llvm::object::Archive* Archive,
-                                      CppSharp::CppParser::NativeLibrary*& NativeLib)
+                                      std::vector<CppSharp::CppParser::NativeLibrary*>& NativeLibs)
 {
-    auto LibName = File;
-    NativeLib = new NativeLibrary();
-    NativeLib->fileName = LibName;
+    auto NativeLib = new NativeLibrary();
+    NativeLib->fileName = File;
 
-    for(auto it = Archive->symbol_begin(); it != Archive->symbol_end(); ++it)
+    for (const auto& Symbol : Archive->symbols())
     {
-        llvm::StringRef SymRef = it->getName();
-        NativeLib->Symbols.push_back(SymRef);
+        llvm::StringRef SymRef = Symbol.getName();
+        NativeLib->Symbols.push_back(SymRef.str());
     }
+    NativeLibs.push_back(NativeLib);
 
     return ParserResultKind::Success;
 }
@@ -4254,17 +4447,17 @@ static void ReadELFDependencies(const llvm::object::ELFFile<ELFT>* ELFFile, CppS
 {
     ELFDumper<ELFT> ELFDumper(ELFFile);
     for (const auto& Dependency : ELFDumper.getNeededLibraries())
-        NativeLib->Dependencies.push_back(Dependency);
+        NativeLib->Dependencies.push_back(Dependency.str());
 }
 
-ParserResultKind Parser::ParseSharedLib(llvm::StringRef File,
+ParserResultKind Parser::ParseSharedLib(const std::string& File,
                                         llvm::object::ObjectFile* ObjectFile,
-                                        CppSharp::CppParser::NativeLibrary*& NativeLib)
+                                        std::vector<CppSharp::CppParser::NativeLibrary*>& NativeLibs)
 {
-    auto LibName = File;
-    NativeLib = new NativeLibrary();
-    NativeLib->fileName = LibName;
+    auto NativeLib = new NativeLibrary();
+    NativeLib->fileName = File;
     NativeLib->archType = ConvertArchType(ObjectFile->getArch());
+    NativeLibs.push_back(NativeLib);
 
     if (ObjectFile->isELF())
     {
@@ -4303,18 +4496,19 @@ ParserResultKind Parser::ParseSharedLib(llvm::StringRef File,
     if (ObjectFile->isCOFF())
     {
         auto COFFObjectFile = static_cast<llvm::object::COFFObjectFile*>(ObjectFile);
-        for (auto ExportedSymbol : COFFObjectFile->export_directories())
+        for (const auto& ExportedSymbol : COFFObjectFile->export_directories())
         {
             llvm::StringRef Symbol;
             if (!ExportedSymbol.getSymbolName(Symbol))
-                NativeLib->Symbols.push_back(Symbol);
+                NativeLib->Symbols.push_back(Symbol.str());
         }
-        for (auto ImportedSymbol : COFFObjectFile->import_directories())
+        for (const auto& ImportedSymbol : COFFObjectFile->import_directories())
         {
             llvm::StringRef Name;
             if (!ImportedSymbol.getName(Name) && (Name.endswith(".dll") || Name.endswith(".DLL")))
-                NativeLib->Dependencies.push_back(Name);
+                NativeLib->Dependencies.push_back(Name.str());
         }
+
         return ParserResultKind::Success;
     }
 
@@ -4332,17 +4526,19 @@ ParserResultKind Parser::ParseSharedLib(llvm::StringRef File,
             {
                 auto dl = MachOObjectFile->getDylibIDLoadCommand(Load);
                 auto lib = llvm::sys::path::filename(Load.Ptr + dl.dylib.name);
-                NativeLib->Dependencies.push_back(lib);
+                NativeLib->Dependencies.push_back(lib.str());
             }
         }
-        auto Error = llvm::Error::success();
-        for (const auto& Entry : MachOObjectFile->exports(Error))
+        // HACK: the correct way is with exported(Err) but it crashes with msvc 32
+        // see https://bugs.llvm.org/show_bug.cgi?id=44433
+        for (const auto& Symbol : MachOObjectFile->symbols())
         {
-            NativeLib->Symbols.push_back(Entry.name());
-        }
-        if (Error)
-        {
-            return ParserResultKind::Error;
+            if (Symbol.getName().takeError() || Symbol.getFlags().takeError())
+                return ParserResultKind::Error;
+
+            if ((Symbol.getFlags().get() & llvm::object::BasicSymbolRef::Flags::SF_Exported) &&
+                !(Symbol.getFlags().get() & llvm::object::BasicSymbolRef::Flags::SF_Undefined))
+                NativeLib->Symbols.push_back(Symbol.getName().get().str());
         }
         return ParserResultKind::Success;
     }
@@ -4357,7 +4553,7 @@ ParserResultKind Parser::ReadSymbols(llvm::StringRef File,
 {
     auto LibName = File;
     NativeLib = new NativeLibrary();
-    NativeLib->fileName = LibName;
+    NativeLib->fileName = LibName.str();
 
     for (auto it = Begin; it != End; ++it)
     {
@@ -4375,57 +4571,77 @@ ParserResultKind Parser::ReadSymbols(llvm::StringRef File,
     return ParserResultKind::Success;
 }
 
-ParserResult* Parser::ParseLibrary(const std::string& File)
+ParserResult* Parser::ParseLibrary(const LinkerOptions* Opts)
 {
     auto res = new ParserResult();
-    if (File.empty())
+
+    for (const auto& Lib : Opts->Libraries)
     {
-        res->kind = ParserResultKind::FileNotFound;
-        return res;
-    }
-
-    llvm::StringRef FileEntry("");
-
-    for (unsigned I = 0, E = opts->LibraryDirs.size(); I != E; ++I)
-    {
-        auto& LibDir = opts->LibraryDirs[I];
-        llvm::SmallString<256> Path(LibDir);
-        llvm::sys::path::append(Path, File);
-
-        if (!(FileEntry = Path.str()).empty() && llvm::sys::fs::exists(FileEntry))
-            break;
-    }
-
-    if (FileEntry.empty())
-    {
-        res->kind = ParserResultKind::FileNotFound;
-        return res;
-    }
-
-    auto BinaryOrErr = llvm::object::createBinary(FileEntry);
-    if (!BinaryOrErr)
-    {
-        auto Error = BinaryOrErr.takeError();
-        res->kind = ParserResultKind::Error;
-        return res;
-    }
-
-    auto OwningBinary = std::move(BinaryOrErr.get());
-    auto Bin = OwningBinary.getBinary();
-    if (auto Archive = llvm::dyn_cast<llvm::object::Archive>(Bin)) {
-        res->kind = ParseArchive(File, Archive, res->library);
-        if (res->kind == ParserResultKind::Success)
+        if (Lib.empty())
+        {
+            res->kind = ParserResultKind::FileNotFound;
             return res;
-    }
+        }
 
-    if (auto ObjectFile = llvm::dyn_cast<llvm::object::ObjectFile>(Bin))
-    {
-        res->kind = ParseSharedLib(File, ObjectFile, res->library);
-        if (res->kind == ParserResultKind::Success)
+        std::string PrefixedLib = "lib" + Lib;
+        std::string FileName;
+        std::string FileEntry;
+
+        using namespace llvm::sys;
+        for (const auto& LibDir : Opts->LibraryDirs)
+        {
+            std::error_code ErrorCode;
+            fs::directory_iterator Dir(LibDir, ErrorCode);
+            for (const auto& File = Dir;
+                 Dir != fs::directory_iterator() && !ErrorCode;
+                 Dir = Dir.increment(ErrorCode))
+            {
+                FileName = path::filename(File->path()).str();
+                if (FileName == Lib ||
+                    FileName == PrefixedLib ||
+                    path::stem(FileName) == Lib ||
+                    path::stem(FileName) == PrefixedLib ||
+                    path::stem(path::stem(FileName)) == Lib ||
+                    path::stem(path::stem(FileName)) == PrefixedLib)
+                {
+                    FileEntry = File->path();
+                    goto found;
+                }
+            }
+        }
+
+        if (FileEntry.empty())
+        {
+            res->kind = ParserResultKind::FileNotFound;
             return res;
+        }
+
+    found:
+        auto BinaryOrErr = llvm::object::createBinary(FileEntry);
+        if (!BinaryOrErr)
+        {
+            auto Error = BinaryOrErr.takeError();
+            res->kind = ParserResultKind::Error;
+            return res;
+        }
+
+        auto OwningBinary = std::move(BinaryOrErr.get());
+        auto Bin = OwningBinary.getBinary();
+        if (auto Archive = llvm::dyn_cast<llvm::object::Archive>(Bin)) {
+            res->kind = ParseArchive(FileName, Archive, res->Libraries);
+            if (res->kind == ParserResultKind::Error)
+                return res;
+        }
+
+        if (auto ObjectFile = llvm::dyn_cast<llvm::object::ObjectFile>(Bin))
+        {
+            res->kind = ParseSharedLib(FileName, ObjectFile, res->Libraries);
+            if (res->kind == ParserResultKind::Error)
+                return res;
+        }
     }
 
-    res->kind = ParserResultKind::Error;
+    res->kind = ParserResultKind::Success;
     return res;
 }
 
@@ -4434,18 +4650,38 @@ ParserResult* ClangParser::ParseHeader(CppParserOptions* Opts)
     if (!Opts)
         return nullptr;
 
-    auto res = new ParserResult();
-    res->codeParser = new Parser(Opts);
-    return res->codeParser->ParseHeader(Opts->SourceFiles);
+    auto& Headers = Opts->SourceFiles;
+    if (Opts->unityBuild)
+    {
+        Parser parser(Opts);
+        return parser.Parse(Headers);
+    }
+
+    ParserResult* res = 0;
+    std::vector<Parser*> parsers;
+    for (size_t i = 0; i < Headers.size(); i++)
+    {
+        auto parser = new Parser(Opts);
+        parsers.push_back(parser);
+        std::vector<std::string> Header(&Headers[i], &Headers[i + 1]);
+        if (i < Headers.size() - 1)
+            delete parser->Parse(Header);
+        else
+            res = parser->Parse(Header);
+    }
+
+    for (auto parser : parsers)
+        delete parser;
+
+    return res;
 }
 
-ParserResult* ClangParser::ParseLibrary(CppParserOptions* Opts)
+ParserResult* ClangParser::ParseLibrary(LinkerOptions* Opts)
 {
     if (!Opts)
         return nullptr;
 
-    Parser Parser(Opts);
-    return Parser.ParseLibrary(Opts->libraryFile);
+    return Parser::ParseLibrary(Opts);
 }
 
 ParserTargetInfo* Parser::GetTargetInfo()
@@ -4453,7 +4689,7 @@ ParserTargetInfo* Parser::GetTargetInfo()
     auto parserTargetInfo = new ParserTargetInfo();
 
     auto& TI = c->getTarget();
-    parserTargetInfo->ABI = TI.getABI();
+    parserTargetInfo->ABI = TI.getABI().str();
 
     parserTargetInfo->char16Type = ConvertIntType(TI.getChar16Type());
     parserTargetInfo->char32Type = ConvertIntType(TI.getChar32Type());

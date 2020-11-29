@@ -1,6 +1,4 @@
-using System;
 using System.Linq;
-using System.Text;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 using CppSharp.Generators.C;
@@ -28,8 +26,8 @@ namespace CppSharp.Generators.CSharp
         protected CSharpMarshalPrinter(CSharpMarshalContext context)
             : base(context)
         {
-            VisitOptions.VisitFunctionParameters = false;
-            VisitOptions.VisitTemplateArguments = false;
+            VisitOptions.ClearFlags(VisitFlags.FunctionParameters |
+                VisitFlags.TemplateArguments);
         }
 
         public override bool VisitMemberPointerType(MemberPointerType member,
@@ -73,19 +71,24 @@ namespace CppSharp.Generators.CSharp
                         Context.MarshalKind != MarshalKind.ReturnVariableArray)
                         goto case ArrayType.ArraySize.Incomplete;
 
-                    var supportBefore = Context.Before;
-                    string value = Generator.GeneratedIdentifier("value");
                     var arrayType = array.Type.Desugar();
-                    supportBefore.WriteLine($"{arrayType}[] {value} = null;");
-                    supportBefore.WriteLine($"if ({Context.ReturnVarName} != null)");
-                    supportBefore.WriteOpenBraceAndIndent();
-                    supportBefore.WriteLine($"{value} = new {arrayType}[{array.Size}];");
-                    supportBefore.WriteLine($"for (int i = 0; i < {array.Size}; i++)");
-                    if (array.Type.IsPointerToPrimitiveType(PrimitiveType.Void))
-                        supportBefore.WriteLineIndent($@"{value}[i] = new global::System.IntPtr({
-                            Context.ReturnVarName}[i]);");
+
+                    if (CheckIfArrayCanBeCopiedUsingMemoryCopy(array))
+                        Context.Return.Write($"CppSharp.Runtime.MarshalUtil.GetArray<{arrayType}>({Context.ReturnVarName}, {array.Size})");
+                    else if (array.Type.IsPrimitiveType(PrimitiveType.Char) && Context.Context.Options.MarshalCharAsManagedChar)
+                        Context.Return.Write($"CppSharp.Runtime.MarshalUtil.GetCharArray({Context.ReturnVarName}, {array.Size})");
+                    else if (array.Type.IsPointerToPrimitiveType(PrimitiveType.Void))
+                        Context.Return.Write($"CppSharp.Runtime.MarshalUtil.GetIntPtrArray({Context.ReturnVarName}, {array.Size})");
                     else
                     {
+                        string value = Generator.GeneratedIdentifier("value");
+                        var supportBefore = Context.Before;
+                        supportBefore.WriteLine($"{arrayType}[] {value} = null;");
+                        supportBefore.WriteLine($"if ({Context.ReturnVarName} != null)");
+                        supportBefore.WriteOpenBraceAndIndent();
+                        supportBefore.WriteLine($"{value} = new {arrayType}[{array.Size}];");
+
+                        supportBefore.WriteLine($"for (int i = 0; i < {array.Size}; i++)");
                         var finalArrayType = arrayType.GetPointee() ?? arrayType;
                         Class @class;
                         if ((finalArrayType.TryGetClass(out @class)) && @class.IsRefType)
@@ -102,20 +105,11 @@ namespace CppSharp.Generators.CSharp
                         }
                         else
                         {
-                            if (arrayType.IsPrimitiveType(PrimitiveType.Bool))
-                                supportBefore.WriteLineIndent($@"{value}[i] = {
-                                    Context.ReturnVarName}[i] != 0;");
-                            else if (arrayType.IsPrimitiveType(PrimitiveType.Char) &&
-                                Context.Context.Options.MarshalCharAsManagedChar)
-                                supportBefore.WriteLineIndent($@"{value}[i] = global::System.Convert.ToChar({
-                                    Context.ReturnVarName}[i]);");
-                            else
-                                supportBefore.WriteLineIndent($@"{value}[i] = {
-                                    Context.ReturnVarName}[i];");
+                            supportBefore.WriteLineIndent($@"{value}[i] = {Context.ReturnVarName}[i];");
                         }
-                    }
-                    supportBefore.UnindentAndWriteCloseBrace();
-                    Context.Return.Write(value);
+                        supportBefore.UnindentAndWriteCloseBrace();
+                        Context.Return.Write(value);
+                    }                    
                     break;
                 case ArrayType.ArraySize.Incomplete:
                     // const char* and const char[] are the same so we can use a string
@@ -146,11 +140,25 @@ namespace CppSharp.Generators.CSharp
 
             var pointee = pointer.Pointee.Desugar();
             var finalPointee = pointer.GetFinalPointee().Desugar();
-            PrimitiveType primitive;
-            if ((pointee.IsConstCharString() && isRefParam) ||
-                (!finalPointee.IsPrimitiveType(out primitive) &&
+            var returnType = Context.ReturnType.Type.Desugar(
+                resolveTemplateSubstitution: false);
+            if ((pointee.IsConstCharString() && (isRefParam || returnType.IsReference())) ||
+                (!finalPointee.IsPrimitiveType(out PrimitiveType primitive) &&
                  !finalPointee.IsEnumType()))
+            {
+                if (Context.MarshalKind != MarshalKind.NativeField &&
+                    pointee.IsPointerTo(out Type type) &&
+                    type.Desugar().TryGetClass(out Class c))
+                {
+                    string ret = Generator.GeneratedIdentifier(Context.ReturnVarName);
+                    Context.Before.WriteLine($@"{typePrinter.IntPtrType} {ret} = {
+                        Context.ReturnVarName} == {typePrinter.IntPtrType}.Zero ? {
+                        typePrinter.IntPtrType}.Zero : new {
+                        typePrinter.IntPtrType}(*(void**) {Context.ReturnVarName});");
+                    Context.ReturnVarName = ret;
+                }
                 return pointer.QualifiedPointee.Visit(this);
+            }
 
             if (isRefParam)
             {
@@ -162,12 +170,10 @@ namespace CppSharp.Generators.CSharp
                 primitive == PrimitiveType.Char)
                 Context.Return.Write($"({pointer}) ");
 
-            var type = Context.ReturnType.Type.Desugar(
-                resolveTemplateSubstitution: false);
             if (Context.Function != null &&
                 Context.Function.OperatorKind == CXXOperatorKind.Subscript)
             {
-                if (type.IsPrimitiveType(primitive))
+                if (returnType.IsPrimitiveType(primitive))
                 {
                     Context.Return.Write("*");
                 }
@@ -182,7 +188,16 @@ namespace CppSharp.Generators.CSharp
             }
 
             if (new QualifiedType(pointer, quals).IsConstRefToPrimitive())
+            {
+                if (finalPointee.IsPrimitiveType(PrimitiveType.Void))
+                {
+                    Context.Return.Write($"new {typePrinter.IntPtrType}(*{Context.ReturnVarName})");
+                    return true;
+                }
                 Context.Return.Write("*");
+                if (Context.MarshalKind == MarshalKind.NativeField)
+                    Context.Return.Write($"({pointer.QualifiedPointee.Visit(typePrinter)}*) ");
+            }
 
             Context.Return.Write(Context.ReturnVarName);
             return true;
@@ -210,32 +225,37 @@ namespace CppSharp.Generators.CSharp
 
         public override bool VisitTypedefType(TypedefType typedef, TypeQualifiers quals)
         {
-            if (!VisitType(typedef, quals))
+            if (!(typedef.Declaration.Type.Desugar(false) is TemplateParameterSubstitutionType) &&
+                !VisitType(typedef, quals))
                 return false;
 
             var decl = typedef.Declaration;
 
-            var functionType = decl.Type as FunctionType;
-            if (functionType != null || decl.Type.IsPointerTo(out functionType))
-            {
-                var ptrName = $"{Generator.GeneratedIdentifier("ptr")}{Context.ParameterIndex}";
+            Type type = decl.Type.Desugar();
+            var functionType = type as FunctionType;
+            if (functionType == null && !type.IsPointerTo(out functionType))
+                return decl.Type.Visit(this);
 
-                Context.Before.WriteLine($"var {ptrName} = {Context.ReturnVarName};");
+            var ptrName = $@"{Generator.GeneratedIdentifier("ptr")}{
+                Context.ParameterIndex}";
 
-                var specialization = decl.Namespace as ClassTemplateSpecialization;
-                Type returnType = Context.ReturnType.Type.Desugar();
-                var finalType = (returnType.GetFinalPointee() ?? returnType).Desugar();
-                var res = string.Format(
-                    "{0} == IntPtr.Zero? null : {1}({2}) Marshal.GetDelegateForFunctionPointer({0}, typeof({2}))",
-                    ptrName,
-                    finalType.IsDependent ? $@"({specialization.TemplatedDecl.TemplatedClass.Typedefs.First(
-                        t => t.Name == decl.Name).Visit(this.typePrinter)}) (object) " : string.Empty,
-                    typedef);
-                Context.Return.Write(res);
-                return true;
-            }
+            Context.Before.WriteLine($"var {ptrName} = {Context.ReturnVarName};");
 
-            return decl.Type.Visit(this);
+            var substitution = decl.Type.Desugar(false)
+                as TemplateParameterSubstitutionType;
+
+            if (substitution != null)
+                Context.Return.Write($@"({
+                    substitution.ReplacedParameter.Parameter.Name}) (object) (");
+
+            Context.Return.Write($@"{ptrName} == IntPtr.Zero? null : {
+                (substitution == null ? $"({Context.ReturnType}) " :
+                 string.Empty)}Marshal.GetDelegateForFunctionPointer({
+                ptrName}, typeof({typedef}))");
+
+            if (substitution != null)
+                Context.Return.Write(")");
+            return true;
         }
 
         public override bool VisitFunctionType(FunctionType function, TypeQualifiers quals)
@@ -264,7 +284,7 @@ namespace CppSharp.Generators.CSharp
                 Context.Return.Write($"({returnType.Visit(typePrinter)}) (object) ");
 
             if (returnType.IsAddress())
-                Context.Return.Write(HandleReturnedPointer(@class, qualifiedClass.Type));
+                Context.Return.Write(HandleReturnedPointer(@class, qualifiedClass));
             else
                 Context.Return.Write($"{qualifiedClass}.{Helpers.CreateInstanceIdentifier}({Context.ReturnVarName})");
 
@@ -312,7 +332,8 @@ namespace CppSharp.Generators.CSharp
             Type finalType = (returnType.GetFinalPointee() ?? returnType).Desugar();
             if (finalType.IsDependent)
                 Context.Return.Write($"({param.ReplacedParameter.Parameter.Name}) (object) ");
-            if (param.Replacement.Type.Desugar().IsPointerToPrimitiveType())
+            Type replacement = param.Replacement.Type.Desugar();
+            if (replacement.IsPointerToPrimitiveType() && !replacement.IsConstCharString())
                 Context.Return.Write($"({typePrinter.IntPtrType}) ");
             return base.VisitTemplateParameterSubstitutionType(param, quals);
         }
@@ -321,36 +342,20 @@ namespace CppSharp.Generators.CSharp
         {
             var originalClass = @class.OriginalClass ?? @class;
             var ret = Generator.GeneratedIdentifier("result") + Context.ParameterIndex;
-            var qualifiedIdentifier = @class.Visit(typePrinter);
-            Context.Before.WriteLine("{0} {1};", qualifiedIdentifier, ret);
-            Context.Before.WriteLine("if ({0} == IntPtr.Zero) {1} = {2};", Context.ReturnVarName, ret,
-                originalClass.IsRefType ? "null" : string.Format("new {0}()", qualifiedClass));
+        
             if (originalClass.IsRefType)
             {
-                Context.Before.WriteLine(
-                    "else if ({0}.NativeToManagedMap.ContainsKey({1}))", qualifiedClass, Context.ReturnVarName);
-                Context.Before.WriteLineIndent("{0} = ({1}) {2}.NativeToManagedMap[{3}];",
-                    ret, qualifiedIdentifier, qualifiedClass, Context.ReturnVarName);
                 var dtor = originalClass.Destructors.FirstOrDefault();
-                if (dtor != null && dtor.IsVirtual)
-                {
-                    Context.Before.WriteLine("else {0}{1} = ({2}) {3}.{4}({5}{6});",
-                        Context.Parameter != null
-                            ? string.Empty
-                            : string.Format("{0}.NativeToManagedMap[{1}] = ", qualifiedClass, Context.ReturnVarName),
-                        ret, qualifiedIdentifier, qualifiedClass, Helpers.CreateInstanceIdentifier, Context.ReturnVarName,
-                        Context.Parameter != null ? ", skipVTables: true" : string.Empty);
-                }
-                else
-                {
-                    Context.Before.WriteLine("else {0} = {1}.{2}({3});", ret, qualifiedClass,
-                        Helpers.CreateInstanceIdentifier, Context.ReturnVarName);
-                }
+                var dtorVirtual = (dtor != null && dtor.IsVirtual);
+                var cache = dtorVirtual && Context.Parameter == null;
+                var skipVTables = dtorVirtual && Context.Parameter != null;
+                Context.Before.WriteLine("var {0} = {1}.__GetOrCreateInstance({2}, {3}{4});",
+                    ret, qualifiedClass, Context.ReturnVarName, cache ? "true" : "false", skipVTables ? ", skipVTables: true" : string.Empty);
             }
             else
             {
-                Context.Before.WriteLine("else {0} = {1}.{2}({3});", ret, qualifiedClass,
-                    Helpers.CreateInstanceIdentifier, Context.ReturnVarName);
+                Context.Before.WriteLine("var {0} = {1} != IntPtr.Zero ? {2}.{3}({4}) : default;",
+                    ret, Context.ReturnVarName, qualifiedClass, Helpers.CreateInstanceIdentifier, Context.ReturnVarName);
             }
             return ret;
         }
@@ -371,7 +376,7 @@ namespace CppSharp.Generators.CSharp
 
             Context.Before.WriteLine($"{intermediateArrayType}[] {intermediateArray};");
 
-            Context.Before.WriteLine($"if (ReferenceEquals({Context.ReturnVarName}, null))");
+            Context.Before.WriteLine($"if ({Context.ReturnVarName} is null)");
             Context.Before.WriteLineIndent($"{intermediateArray} = null;");
             Context.Before.WriteLine("else");
 
@@ -399,6 +404,12 @@ namespace CppSharp.Generators.CSharp
             Context.Before.UnindentAndWriteCloseBrace();
 
             Context.Return.Write(intermediateArray);
+        }
+
+        public bool CheckIfArrayCanBeCopiedUsingMemoryCopy(ArrayType array)
+        {
+            return array.Type.IsPrimitiveType(out var primitive) &&
+                (!Context.Context.Options.MarshalCharAsManagedChar || primitive != PrimitiveType.Char);
         }
 
         private readonly CSharpTypePrinter typePrinter;
@@ -499,12 +510,12 @@ namespace CppSharp.Generators.CSharp
             var isRefParam = param != null && (param.IsInOut || param.IsOut);
 
             var pointee = pointer.Pointee.Desugar();
-            if (pointee.IsConstCharString() && isRefParam)
+            if (pointee.IsConstCharString())
             {
                 if (param.IsOut)
                 {
                     MarshalString(pointee);
-                    Context.Return.Write("IntPtr.Zero");
+                    Context.Return.Write($"{typePrinter.IntPtrType}.Zero");
                     Context.ArgumentPrefix.Write("&");
                     return true;
                 }
@@ -513,13 +524,16 @@ namespace CppSharp.Generators.CSharp
                     MarshalString(pointee);
                     pointer.QualifiedPointee.Visit(this);
                     Context.ArgumentPrefix.Write("&");
+                    return true;
                 }
-                else
+                if (pointer.IsReference)
                 {
+                    Context.Return.Write($@"({typePrinter.PrintNative(
+                        pointee.GetQualifiedPointee())}*) ");
                     pointer.QualifiedPointee.Visit(this);
-                    Context.Cleanup.WriteLine($"Marshal.FreeHGlobal({Context.ArgName});");
+                    Context.ArgumentPrefix.Write("&");
+                    return true;
                 }
-                return true;
             }
 
             var finalPointee = (pointee.GetFinalPointee() ?? pointee).Desugar();
@@ -538,24 +552,30 @@ namespace CppSharp.Generators.CSharp
                     return true;
                 }
 
+                bool isConst = quals.IsConst || pointer.QualifiedPointee.Qualifiers.IsConst ||
+                     pointer.GetFinalQualifiedPointee().Qualifiers.IsConst;
+
                 if (Context.Context.Options.MarshalCharAsManagedChar &&
                     primitive == PrimitiveType.Char)
                 {
-                    Context.Return.Write($"({typePrinter.PrintNative(pointer)}) ");
+                    Context.Return.Write($"({typePrinter.PrintNative(pointer)})");
+                    if (isConst)
+                        Context.Return.Write("&");
                     Context.Return.Write(param.Name);
                     return true;
                 }
 
                 pointer.QualifiedPointee.Visit(this);
-                bool isVoid = primitive == PrimitiveType.Void &&
-                    pointee.IsAddress() && pointer.IsReference();
-                if (pointer.Pointee.Desugar(false) is TemplateParameterSubstitutionType ||
-                    isVoid)
+
+                if (Context.Parameter.IsIndirect)
+                    Context.ArgumentPrefix.Write("&");
+                bool isVoid = primitive == PrimitiveType.Void && pointer.IsReference() && isConst;
+                if (pointer.Pointee.Desugar(false) is TemplateParameterSubstitutionType || isVoid)
                 {
                     var local = Generator.GeneratedIdentifier($@"{
                         param.Name}{Context.ParameterIndex}");
                     string cast = isVoid ? $@"({pointee.Visit(
-                        new CppTypePrinter { PrintTypeQualifiers = false })}) " : string.Empty;
+                        new CppTypePrinter(Context.Context) { PrintTypeQualifiers = false })}) " : string.Empty;
                     Context.Before.WriteLine($"var {local} = {cast}{Context.Return};");
                     Context.Return.StringBuilder.Clear();
                     Context.Return.Write(local);
@@ -566,25 +586,34 @@ namespace CppSharp.Generators.CSharp
                 return true;
             }
 
+
+            string arg = Generator.GeneratedIdentifier(Context.ArgName);
+
             if (pointee.TryGetClass(out Class @class) && @class.IsValueType)
             {
                 if (Context.Parameter.Usage == ParameterUsage.Out)
                 {
                     var qualifiedIdentifier = (@class.OriginalClass ?? @class).Visit(typePrinter);
                     Context.Before.WriteLine("var {0} = new {1}.{2}();",
-                        Generator.GeneratedIdentifier(Context.ArgName), qualifiedIdentifier,
-                        Helpers.InternalStruct);
+                        arg, qualifiedIdentifier, Helpers.InternalStruct);
                 }
                 else
                 {
                     Context.Before.WriteLine("var {0} = {1}.{2};",
-                            Generator.GeneratedIdentifier(Context.ArgName),
-                            Context.Parameter.Name,
-                            Helpers.InstanceIdentifier);
+                        arg, Context.Parameter.Name, Helpers.InstanceIdentifier);
                 }
 
-                Context.Return.Write("new global::System.IntPtr(&{0})",
-                    Generator.GeneratedIdentifier(Context.ArgName));
+                Context.Return.Write($"new {typePrinter.IntPtrType}(&{arg})");
+                return true;
+            }
+
+            if (pointee.IsPointerTo(out Type type) &&
+                type.Desugar().TryGetClass(out Class c))
+            {
+                pointer.QualifiedPointee.Visit(this);
+                Context.Before.WriteLine($"var {arg} = {Context.Return};");
+                Context.Return.StringBuilder.Clear();
+                Context.Return.Write($"new {typePrinter.IntPtrType}(&{arg})");
                 return true;
             }
 
@@ -620,9 +649,10 @@ namespace CppSharp.Generators.CSharp
         public override bool VisitTemplateParameterSubstitutionType(TemplateParameterSubstitutionType param, TypeQualifiers quals)
         {
             var replacement = param.Replacement.Type.Desugar();
-            if (replacement.IsPrimitiveType() ||
-                replacement.IsPointerToPrimitiveType() ||
-                replacement.IsEnum())
+            if ((replacement.IsPrimitiveType() ||
+                 replacement.IsPointerToPrimitiveType() ||
+                 replacement.IsEnum()) &&
+                !replacement.IsConstCharString())
             {
                 Context.Return.Write($"({replacement}) ");
                 if (replacement.IsPointerToPrimitiveType())
@@ -679,46 +709,62 @@ namespace CppSharp.Generators.CSharp
                 @interface.IsInterface)
                 paramInstance = $"{param}.__PointerTo{@interface.OriginalClass.Name}";
             else
-                paramInstance = $@"{param}.{Helpers.InstanceIdentifier}";
-            if (type.IsAddress())
+                paramInstance = $"{param}.{Helpers.InstanceIdentifier}";
+
+            if (!type.IsAddress())
             {
-                Class decl;
-                if (type.TryGetClass(out decl) && decl.IsValueType)
+                Context.Before.WriteLine($"if (ReferenceEquals({Context.Parameter.Name}, null))");
+                Context.Before.WriteLineIndent(
+                    $@"throw new global::System.ArgumentNullException(""{
+                        Context.Parameter.Name}"", ""Cannot be null because it is passed by value."");");
+                var realClass = @class.OriginalClass ?? @class;
+                var qualifiedIdentifier = typePrinter.PrintNative(realClass);
+                Context.ArgumentPrefix.Write($"*({qualifiedIdentifier}*) ");
+                Context.Return.Write(paramInstance);
+                return;
+            }
+
+            Class decl;
+            if (type.TryGetClass(out decl) && decl.IsValueType)
+            {
+                Context.Return.Write(paramInstance);
+                return;
+            }
+
+            if (type.IsPointer())
+            {
+                if (Context.Parameter.IsIndirect)
+                {
+                    Context.Before.WriteLine($"if (ReferenceEquals({Context.Parameter.Name}, null))");
+                    Context.Before.WriteLineIndent(
+                        $@"throw new global::System.ArgumentNullException(""{
+                            Context.Parameter.Name}"", ""Cannot be null because it is passed by value."");");
                     Context.Return.Write(paramInstance);
+                }
                 else
                 {
-                    if (type.IsPointer())
-                    {
-                        Context.Return.Write("{0}{1}",
-                            method != null && method.OperatorKind == CXXOperatorKind.EqualEqual
-                                ? string.Empty
-                                : $"ReferenceEquals({param}, null) ? global::System.IntPtr.Zero : ",
-                            paramInstance);
-                    }
-                    else
-                    {
-                        if (method == null ||
-                            // redundant for comparison operators, they are handled in a special way
-                            (method.OperatorKind != CXXOperatorKind.EqualEqual &&
-                            method.OperatorKind != CXXOperatorKind.ExclaimEqual))
-                        {
-                            Context.Before.WriteLine("if (ReferenceEquals({0}, null))", param);
-                            Context.Before.WriteLineIndent(
-                                "throw new global::System.ArgumentNullException(\"{0}\", " +
-                                "\"Cannot be null because it is a C++ reference (&).\");",
-                                param);
-                        }
-                        Context.Return.Write(paramInstance);
-                    }
+                    Context.Return.Write("{0}{1}",
+                        method != null && method.OperatorKind == CXXOperatorKind.EqualEqual
+                            ? string.Empty
+                            : $"{param} is null ? {typePrinter.IntPtrType}.Zero : ",
+                        paramInstance);
                 }
                 return;
             }
 
-            var realClass = @class.OriginalClass ?? @class;
-            var qualifiedIdentifier = typePrinter.PrintNative(realClass);
-            Context.Return.Write(
-                "ReferenceEquals({0}, null) ? new {1}() : *({1}*) {2}",
-                param, qualifiedIdentifier, paramInstance);
+            if (method == null ||
+                // redundant for comparison operators, they are handled in a special way
+                (method.OperatorKind != CXXOperatorKind.EqualEqual &&
+                method.OperatorKind != CXXOperatorKind.ExclaimEqual))
+            {
+                Context.Before.WriteLine($"if (ReferenceEquals({Context.Parameter.Name}, null))");
+                Context.Before.WriteLineIndent(
+                    $@"throw new global::System.ArgumentNullException(""{
+                        Context.Parameter.Name}"", ""Cannot be null because it is a C++ reference (&)."");",
+                    param);
+            }
+
+            Context.Return.Write(paramInstance);
         }
 
         private void MarshalValueClass()
@@ -808,7 +854,7 @@ namespace CppSharp.Generators.CSharp
 
             Context.Before.WriteLine($"{intermediateArrayType}[] {intermediateArray};");
 
-            Context.Before.WriteLine($"if (ReferenceEquals({Context.Parameter.Name}, null))");
+            Context.Before.WriteLine($"if ({Context.Parameter.Name} is null)");
                 Context.Before.WriteLineIndent($"{intermediateArray} = null;");
             Context.Before.WriteLine("else");
 
@@ -823,12 +869,12 @@ namespace CppSharp.Generators.CSharp
             if (elementType.IsAddress())
             {
                 var intPtrZero = $"{typePrinter.IntPtrType}.Zero";
-                Context.Before.WriteLine($@"{intermediateArray}[i] = ReferenceEquals({
-                    element}, null) ? {intPtrZero} : {element}.{Helpers.InstanceIdentifier};");
+                Context.Before.WriteLine($@"{intermediateArray}[i] = {
+                    element} is null ? {intPtrZero} : {element}.{Helpers.InstanceIdentifier};");
             }
             else
-                Context.Before.WriteLine($@"{intermediateArray}[i] = ReferenceEquals({
-                    element}, null) ? new {intermediateArrayType}() : *({
+                Context.Before.WriteLine($@"{intermediateArray}[i] = {
+                    element} is null ? new {intermediateArrayType}() : *({
                     intermediateArrayType}*) {element}.{Helpers.InstanceIdentifier};");
             Context.Before.UnindentAndWriteCloseBrace();
 

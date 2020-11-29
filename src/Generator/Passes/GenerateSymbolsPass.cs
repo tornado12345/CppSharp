@@ -11,21 +11,9 @@ namespace CppSharp.Passes
 {
     public class GenerateSymbolsPass : TranslationUnitPass
     {
-        public GenerateSymbolsPass()
-        {
-            VisitOptions.VisitClassBases = false;
-            VisitOptions.VisitClassFields = false;
-            VisitOptions.VisitClassTemplateSpecializations = false;
-            VisitOptions.VisitEventParameters = false;
-            VisitOptions.VisitFunctionParameters = false;
-            VisitOptions.VisitFunctionReturnType = false;
-            VisitOptions.VisitNamespaceEnums = false;
-            VisitOptions.VisitNamespaceEvents = false;
-            VisitOptions.VisitNamespaceTemplates = false;
-            VisitOptions.VisitNamespaceTypedefs = false;
-            VisitOptions.VisitNamespaceVariables = false;
-            VisitOptions.VisitTemplateArguments = false;
-        }
+        public GenerateSymbolsPass() => VisitOptions.ResetFlags(
+            VisitFlags.ClassMethods | VisitFlags.ClassProperties |
+            VisitFlags.ClassTemplateSpecializations | VisitFlags.NamespaceVariables);
 
         public override bool VisitASTContext(ASTContext context)
         {
@@ -46,22 +34,6 @@ namespace CppSharp.Passes
             foreach (var module in modules)
             {
                 var symbolsCodeGenerator = symbolsCodeGenerators[module];
-                if (specializations.ContainsKey(module))
-                {
-                    symbolsCodeGenerator.NewLine();
-                    foreach (var specialization in specializations[module])
-                    {
-                        Func<Method, bool> exportable = m => !m.IsDependent &&
-                            !m.IsImplicit && !m.IsDeleted && !m.IsDefaulted;
-                        if (specialization.Methods.Any(m => m.IsInvalid && exportable(m)))
-                            foreach (var method in specialization.Methods.Where(
-                                m => m.IsGenerated && (m.InstantiatedFrom == null || m.InstantiatedFrom.IsGenerated) &&
-                                     exportable(m)))
-                                symbolsCodeGenerator.VisitMethodDecl(method);
-                        else
-                            symbolsCodeGenerator.VisitClassTemplateSpecializationDecl(specialization);
-                    }
-                }
 
                 var cpp = $"{module.SymbolsLibraryName}.{symbolsCodeGenerator.FileExtension}";
                 Directory.CreateDirectory(Options.OutputDir);
@@ -98,8 +70,6 @@ namespace CppSharp.Passes
             if (!base.VisitFunctionDecl(function))
                 return false;
 
-            var module = function.TranslationUnit.Module;
-
             if (function.IsGenerated)
             {
                 ASTUtils.CheckTypeForSpecialization(function.OriginalReturnType.Type,
@@ -112,8 +82,19 @@ namespace CppSharp.Passes
             if (!NeedsSymbol(function))
                 return false;
 
-            var symbolsCodeGenerator = GetSymbolsCodeGenerator(module);
-            return function.Visit(symbolsCodeGenerator);
+            Module module = function.TranslationUnit.Module;
+            return function.Visit(GetSymbolsCodeGenerator(module));
+        }
+
+        public override bool VisitVariableDecl(Variable variable)
+        {
+            if (!base.VisitVariableDecl(variable) ||
+                !(variable.Namespace is ClassTemplateSpecialization specialization) ||
+                specialization.SpecializationKind == TemplateSpecializationKind.ExplicitSpecialization)
+                return false;
+
+            Module module = variable.TranslationUnit.Module;
+            return variable.Visit(GetSymbolsCodeGenerator(module));
         }
 
         public class SymbolsCodeEventArgs : EventArgs
@@ -131,18 +112,26 @@ namespace CppSharp.Passes
 
         private bool NeedsSymbol(Function function)
         {
-            var mangled = function.Mangled;
             var method = function as Method;
+            bool isInImplicitSpecialization;
+            var declarationContext = function.Namespace;
+            do
+            {
+                isInImplicitSpecialization =
+                    declarationContext is ClassTemplateSpecialization specialization &&
+                    specialization.SpecializationKind !=
+                        TemplateSpecializationKind.ExplicitSpecialization;
+                declarationContext = declarationContext.Namespace;
+            } while (!isInImplicitSpecialization && declarationContext != null);
+
             return function.IsGenerated && !function.IsDeleted &&
-                !function.IsDependent && !function.IsPure &&
-                (!string.IsNullOrEmpty(function.Body) || function.IsImplicit) &&
-                !(function.Namespace is ClassTemplateSpecialization) &&
-                // we don't need symbols for virtual functions anyway
-                (method == null || (!method.IsVirtual && !method.IsSynthetized &&
-                 (!method.IsConstructor || !((Class) method.Namespace).IsAbstract))) &&
+                !function.IsDependent && !function.IsPure && function.Namespace.IsGenerated &&
+                (!string.IsNullOrEmpty(function.Body) ||
+                 isInImplicitSpecialization || function.IsImplicit) &&
+                (method?.NeedsSymbol() != false) &&
                 // we cannot handle nested anonymous types
                 (!(function.Namespace is Class) || !string.IsNullOrEmpty(function.Namespace.OriginalName)) &&
-                !Context.Symbols.FindSymbol(ref mangled);
+                !Context.Symbols.FindLibraryBySymbol(function.Mangled, out _);
         }
 
         private SymbolsCodeGenerator GetSymbolsCodeGenerator(Module module)
@@ -193,7 +182,12 @@ namespace CppSharp.Passes
                 specs = specializations[specialization.TranslationUnit.Module];
             else specs = specializations[specialization.TranslationUnit.Module] =
                 new HashSet<ClassTemplateSpecialization>();
-            specs.Add(specialization);
+            if (!specs.Contains(specialization))
+            {
+                specs.Add(specialization);
+                foreach (Method method in specialization.Methods)
+                    method.Visit(this);
+            }
             GetSymbolsCodeGenerator(specialization.TranslationUnit.Module);
         }
 
@@ -221,20 +215,23 @@ namespace CppSharp.Passes
 
         private void CollectSymbols(string outputDir, string library)
         {
-            using (var parserOptions = new ParserOptions())
+            using (var linkerOptions = new LinkerOptions())
             {
-                parserOptions.AddLibraryDirs(outputDir);
+                linkerOptions.AddLibraryDirs(outputDir);
                 var output = GetOutputFile(library);
-                parserOptions.LibraryFile = output;
-                using (var parserResult = Parser.ClangParser.ParseLibrary(parserOptions))
+                linkerOptions.AddLibraries(output);
+                using (var parserResult = Parser.ClangParser.ParseLibrary(linkerOptions))
                 {
                     if (parserResult.Kind == ParserResultKind.Success)
                     {
-                        var nativeLibrary = ClangParser.ConvertLibrary(parserResult.Library);
                         lock (@lock)
                         {
-                            Context.Symbols.Libraries.Add(nativeLibrary);
-                            Context.Symbols.IndexSymbols();
+                            for (uint i = 0; i < parserResult.LibrariesCount; i++)
+                            {
+                                var nativeLibrary = ClangParser.ConvertLibrary(parserResult.GetLibraries(i));
+                                Context.Symbols.Libraries.Add(nativeLibrary);
+                                Context.Symbols.IndexSymbols();
+                            }
                         }
                     }
                     else

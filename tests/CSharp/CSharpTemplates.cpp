@@ -4,6 +4,10 @@ T1::T1()
 {
 }
 
+T1::T1(const T1& other) : field(other.field)
+{
+}
+
 T1::T1(int f)
 {
     field = f;
@@ -16,6 +20,10 @@ T1::~T1()
 int T1::getField() const
 {
     return field;
+}
+
+T2::T2()
+{
 }
 
 DerivedFromSpecializationOfUnsupportedTemplate::DerivedFromSpecializationOfUnsupportedTemplate()
@@ -120,7 +128,11 @@ void TemplateSpecializer::completeSpecializationInParameter(DependentValueFields
 
 void TemplateSpecializer::completeSpecializationInParameter(TwoTemplateArgs<int *, int *> p1,
                                                             TwoTemplateArgs<int *, int> p2,
-                                                            TwoTemplateArgs<int *, float> p3)
+                                                            TwoTemplateArgs<int *, float> p3,
+                                                            TwoTemplateArgs<const char *, int> p4,
+                                                            TwoTemplateArgs<QString, int> p5,
+                                                            TwoTemplateArgs<const char *, int>::iterator p6,
+                                                            TwoTemplateArgs<QString, int>::iterator p7)
 {
 }
 
@@ -139,6 +151,16 @@ RegularDynamic::~RegularDynamic()
 
 void RegularDynamic::virtualFunction()
 {
+}
+
+int ImplementAbstractTemplate::property()
+{
+    return 55;
+}
+
+int ImplementAbstractTemplate::callFunction()
+{
+    return 65;
 }
 
 void forceUseSpecializations(IndependentFields<int> _1, IndependentFields<bool> _2,

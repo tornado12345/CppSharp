@@ -23,11 +23,37 @@ namespace CppSharp.Generators.CSharp
         {
             var printedClass = @class.Visit(gen.TypePrinter);
             if (@class.IsDependent)
-                foreach (var specialization in @class.GetSpecializedClassesToGenerate(
-                    ).Where(s => s.IsGenerated))
-                    gen.GenerateNativeConstructorByValue(specialization, printedClass.Type);
+            {
+                IEnumerable<Class> specializations =
+                    @class.GetSpecializedClassesToGenerate().Where(s => s.IsGenerated);
+                if (@class.IsTemplate)
+                    specializations = specializations.KeepSingleAllPointersSpecialization();
+                foreach (var specialization in specializations)
+                    gen.GenerateNativeConstructorByValue(specialization, printedClass);
+            }
             else
-                gen.GenerateNativeConstructorByValue(@class, printedClass.Type);
+            {
+                gen.GenerateNativeConstructorByValue(@class, printedClass);
+            }
+        }
+
+        public static IEnumerable<Class> KeepSingleAllPointersSpecialization(
+            this IEnumerable<Class> specializations)
+        {
+            Func<TemplateArgument, bool> allPointers = (TemplateArgument a) =>
+                a.Type.Type?.Desugar().IsAddress() == true;
+            var groups = (from ClassTemplateSpecialization spec in specializations
+                          group spec by spec.Arguments.All(allPointers)
+                          into @group
+                          select @group).ToList();
+            foreach (var group in groups)
+            {
+                if (group.Key)
+                    yield return group.First();
+                else
+                    foreach (var specialization in group)
+                        yield return specialization;
+            }
         }
 
         public static void GenerateField(this CSharpSources gen, Class @class,
@@ -79,11 +105,13 @@ namespace CppSharp.Generators.CSharp
                 foreach (var specialization in @class.Specializations.Where(s => s.IsGenerated))
                 {
                     WriteTemplateSpecializationCheck(gen, @class, specialization);
+                    gen.PushBlock(BlockKind.Block);
                     gen.WriteOpenBraceAndIndent();
                     generate(specialization);
-                    if (isVoid)
+                    if (isVoid && !gen.ActiveBlock.FindBlocks(BlockKind.Unreachable).Any())
                         gen.WriteLine("return;");
                     gen.UnindentAndWriteCloseBrace();
+                    gen.PopBlock();
                 }
                 ThrowException(gen, @class);
             }
@@ -98,7 +126,8 @@ namespace CppSharp.Generators.CSharp
             var names = new List<string> { mapped.OriginalName };
             foreach (TypePrintScopeKind kind in Enum.GetValues(typeof(TypePrintScopeKind)))
             {
-                var cppTypePrinter = new CppTypePrinter { ScopeKind = kind };
+                var cppTypePrinter = new CppTypePrinter(context) { ScopeKind = kind };
+                cppTypePrinter.PushContext(TypePrinterContextKind.Native);
                 names.Add(mapped.Visit(cppTypePrinter));
             }
             foreach (var name in names.Where(context.TypeMaps.TypeMaps.ContainsKey))
@@ -112,8 +141,8 @@ namespace CppSharp.Generators.CSharp
                 Enumerable.Range(0, @class.TemplateParameters.Count).Select(
                 i =>
                 {
-                    CppSharp.AST.Type type = specialization.Arguments[i].Type.Type.Desugar();
-                    return type.IsPointerToPrimitiveType() ?
+                    CppSharp.AST.Type type = specialization.Arguments[i].Type.Type;
+                    return type.IsPointerToPrimitiveType() && !type.IsConstCharString() ?
                         $"__{@class.TemplateParameters[i].Name}.FullName == \"System.IntPtr\"" :
                         $"__{@class.TemplateParameters[i].Name}.IsAssignableFrom(typeof({type}))";
                 })));

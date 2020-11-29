@@ -1,25 +1,47 @@
 ﻿using CppSharp.AST;
+using CppSharp.Types;
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace CppSharp.Generators
 {
     public class TypePrinterResult
     {
-        public string Type;
-        public string NameSuffix;
+        public string Type { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public StringBuilder NamePrefix { get; set; } = new StringBuilder();
+        public StringBuilder NameSuffix { get; set; } = new StringBuilder();
+        public TypeMap TypeMap { get; set; }
 
-        public static implicit operator TypePrinterResult(string type)
+        public TypePrinterResult(string type = "", string nameSuffix = "")
         {
-            return new TypePrinterResult { Type = type };
+            Type = type;
+            NameSuffix.Append(nameSuffix);
         }
 
-        public static implicit operator string(TypePrinterResult result)
+        public void RemoveNamespace()
         {
-            return result.Type;
+            var index = Type.LastIndexOf('.');
+            if (index != -1)
+                Type = Type.Substring(index + 1);
         }
 
-        public override string ToString() => Type;
+        public static implicit operator TypePrinterResult(string type) =>
+            new TypePrinterResult { Type = type };
+
+        public static implicit operator string(TypePrinterResult result) =>
+           result.ToString();
+
+        public override string ToString()
+        {
+            bool hasPlaceholder = Type.Contains("{0}");
+            if (hasPlaceholder)
+                return string.Format(Type, $"{NamePrefix}{Name}{NameSuffix}");
+
+            var namePrefix = (Name.Length > 0) ? $"{NamePrefix} " : NamePrefix.ToString();
+            return $"{Type}{namePrefix}{Name}{NameSuffix}";
+        }
     }
 
     public class TypePrinter : ITypePrinter<TypePrinterResult>,
@@ -37,11 +59,11 @@ namespace CppSharp.Generators
         public TypePrintScopeKind ScopeKind = TypePrintScopeKind.GlobalQualified;
         public bool IsGlobalQualifiedScope => ScopeKind == TypePrintScopeKind.GlobalQualified;
 
-        public TypePrinter()
+        public TypePrinter(TypePrinterContextKind contextKind = TypePrinterContextKind.Managed)
         {
             contexts = new Stack<TypePrinterContextKind>();
             marshalKinds = new Stack<MarshalKind>();
-            PushContext(TypePrinterContextKind.Managed);
+            PushContext(contextKind);
             PushMarshalKind(MarshalKind.Unknown);
         }
 
@@ -350,6 +372,11 @@ namespace CppSharp.Generators
             throw new NotImplementedException();
         }
 
+        public TypePrinterResult VisitUnresolvedUsingType(UnresolvedUsingType unresolvedUsingType, TypeQualifiers quals)
+        {
+            throw new NotImplementedException();
+        }
+
         public virtual TypePrinterResult VisitUnsupportedType(UnsupportedType type,
             TypeQualifiers quals)
         {
@@ -372,10 +399,20 @@ namespace CppSharp.Generators
             throw new NotImplementedException();
         }
 
+        public TypePrinterResult VisitUnresolvedUsingDecl(UnresolvedUsingTypename unresolvedUsingTypename)
+        {
+            throw new NotImplementedException();
+        }
+
         public virtual TypePrinterResult VisitVectorType(VectorType vectorType,
             TypeQualifiers quals)
         {
             throw new NotImplementedException();
+        }
+
+        public virtual TypePrinterResult VisitQualifiedType(QualifiedType type)
+        {
+            return type.Type.Visit(this, type.Qualifiers);
         }
 
         #endregion

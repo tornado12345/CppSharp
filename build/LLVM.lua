@@ -1,18 +1,17 @@
 -- Setup the LLVM dependency directories
 
-LLVMRootDir = depsdir .. "/llvm/"
+LLVMRootDir = builddir .. "/llvm/llvm-project"
 
 local LLVMDirPerConfiguration = false
 
 local LLVMRootDirDebug = ""
 local LLVMRootDirRelease = ""
 
-require "scripts/LLVM"
+require "llvm/LLVM"
 
 function SearchLLVM()
-  local basedir = path.getdirectory(_PREMAKE_COMMAND)
-  LLVMRootDirDebug = basedir .. "/scripts/" .. get_llvm_package_name(nil, "Debug")
-  LLVMRootDirRelease = basedir .. "/scripts/" .. get_llvm_package_name()
+  LLVMRootDirDebug = builddir .. "/llvm/" .. get_llvm_package_name(nil, "Debug")
+  LLVMRootDirRelease = builddir .. "/llvm/" .. get_llvm_package_name()
 
   if os.isdir(LLVMRootDirDebug) or os.isdir(LLVMRootDirRelease) then
     LLVMDirPerConfiguration = true
@@ -43,30 +42,30 @@ function SetupLLVMIncludes()
       includedirs
       {
         path.join(LLVMRootDirDebug, "include"),
-        path.join(LLVMRootDirDebug, "tools/clang/include"),
-        path.join(LLVMRootDirDebug, "tools/clang/lib"),
+        path.join(LLVMRootDirDebug, "clang/include"),
+        path.join(LLVMRootDirDebug, "clang/lib"),
         path.join(LLVMRootDirDebug, "build/include"),
-        path.join(LLVMRootDirDebug, "build/tools/clang/include"),
+        path.join(LLVMRootDirDebug, "build/clang/include"),
       }
 
     filter { "configurations:Release" }
       includedirs
       {
         path.join(LLVMRootDirRelease, "include"),
-        path.join(LLVMRootDirRelease, "tools/clang/include"),
-        path.join(LLVMRootDirRelease, "tools/clang/lib"),
+        path.join(LLVMRootDirRelease, "clang/include"),
+        path.join(LLVMRootDirRelease, "clang/lib"),
         path.join(LLVMRootDirRelease, "build/include"),
-        path.join(LLVMRootDirRelease, "build/tools/clang/include"),
+        path.join(LLVMRootDirRelease, "build/clang/include"),
       }
   else
     local LLVMBuildDir = get_llvm_build_dir()
     includedirs
     {
       path.join(LLVMRootDir, "include"),
-      path.join(LLVMRootDir, "tools/clang/include"),
-      path.join(LLVMRootDir, "tools/clang/lib"),
+      path.join(LLVMRootDir, "clang/include"),
+      path.join(LLVMRootDir, "clang/lib"),
       path.join(LLVMBuildDir, "include"),
-      path.join(LLVMBuildDir, "tools/clang/include"),
+      path.join(LLVMBuildDir, "clang/include"),
     }
   end
 
@@ -86,24 +85,31 @@ function CopyClangIncludes()
 
     if os.isdir(path.join(clangBuiltinRelease, "clang")) then
       clangBuiltinIncludeDir = clangBuiltinRelease
-    end    
+    end
   end
 
   if os.isdir(clangBuiltinIncludeDir) then
-    postbuildcommands { string.format('{COPY} "%s" "%%{cfg.buildtarget.directory}"', clangBuiltinIncludeDir) }
+    postbuildcommands
+    { 
+        -- Workaround Premake OS-specific behaviour when copying folders:
+        -- See: https://github.com/premake/premake-core/issues/1232
+        '{RMDIR} "%%{cfg.buildtarget.directory}/lib"',
+        '{MKDIR} "%%{cfg.buildtarget.directory}/lib"',
+        string.format('{COPY} "%s" "%%{cfg.buildtarget.directory}/lib"', clangBuiltinIncludeDir) 
+    }
   end
 end
 
 function SetupLLVMLibs()
   local c = filter()
 
-  filter { "action:not vs*" }
+  filter { "system:not msc*" }
     defines { "__STDC_CONSTANT_MACROS", "__STDC_LIMIT_MACROS" }
 
   filter { "system:macosx" }
     links { "c++", "curses", "pthread", "z" }
 
-  filter { "action:vs*" }
+  filter { "toolset:msc*" }
     links { "version" }
 
   filter {}
@@ -118,10 +124,10 @@ function SetupLLVMLibs()
     local LLVMBuildDir = get_llvm_build_dir()
     libdirs { path.join(LLVMBuildDir, "lib") }
 
-    filter { "configurations:Debug", "action:vs*" }
+    filter { "configurations:Debug", "toolset:msc*" }
       libdirs { path.join(LLVMBuildDir, "Debug/lib") }
 
-    filter { "configurations:Release", "action:vs*" }
+    filter { "configurations:Release", "toolset:msc*" }
       libdirs { path.join(LLVMBuildDir, "RelWithDebInfo/lib") }
   end
 
@@ -141,41 +147,56 @@ function SetupLLVMLibs()
       "clangLex",
       "clangBasic",
       "clangIndex",
-      "LLVMLinker",
+      "LLVMWindowsManifest",
+      "LLVMDebugInfoPDB",
+      "LLVMLTO",
+      "LLVMPasses",
+      "LLVMObjCARCOpts",
+      "LLVMLibDriver",
+      "LLVMFrontendOpenMP",
+      "LLVMOption",
+      "LLVMCoverage",
+      "LLVMCoroutines",
+      "LLVMX86Disassembler",
+      "LLVMX86AsmParser",
+      "LLVMX86CodeGen",
+      "LLVMX86Desc",
+      "LLVMX86Info",
       "LLVMipo",
+      "LLVMInstrumentation",
       "LLVMVectorize",
-      "LLVMBitWriter",
+      "LLVMLinker",
       "LLVMIRReader",
       "LLVMAsmParser",
-      "LLVMOption",
-      "LLVMInstrumentation",
-      "LLVMProfileData",
-      "LLVMX86AsmParser",
-      "LLVMX86Desc",
-      "LLVMObject",
-      "LLVMMCParser",
-      "LLVMBitReader",
-      "LLVMX86Info",
-      "LLVMX86AsmPrinter",
-      "LLVMX86Utils",
-      "LLVMX86CodeGen",
-      "LLVMX86Disassembler",
-      "LLVMCodeGen",
-      "LLVMSelectionDAG",
+      "LLVMMCDisassembler",
+      "LLVMCFGuard",
       "LLVMGlobalISel",
-      "LLVMDebugInfoCodeView",
+      "LLVMSelectionDAG",
+      "LLVMAsmPrinter",
+      "LLVMDebugInfoDWARF",
+      "LLVMCodeGen",
+      "LLVMTarget",
       "LLVMScalarOpts",
       "LLVMInstCombine",
+      "LLVMAggressiveInstCombine",
       "LLVMTransformUtils",
+      "LLVMBitWriter",
       "LLVMAnalysis",
-      "LLVMTarget",
-      "LLVMMCDisassembler",
-      "LLVMMC",
-      "LLVMCoverage",
+      "LLVMProfileData",
+      "LLVMObject",
+      "LLVMTextAPI",
+      "LLVMBitReader",
       "LLVMCore",
-      "LLVMSupport",
+      "LLVMRemarks",
+      "LLVMBitstreamReader",
+      "LLVMMCParser",
+      "LLVMMC",
+      "LLVMDebugInfoCodeView",
+      "LLVMDebugInfoMSF",
       "LLVMBinaryFormat",
-      "LLVMDemangle"
+      "LLVMSupport",
+      "LLVMDemangle",
+      "LLVMHelloNew"
     }
     
   filter(c)

@@ -33,6 +33,14 @@ namespace CppSharp
         }
 
         /// <summary>
+        /// Remove a previously-added pass, if exists.
+        /// </summary>
+        public bool RemovePass(T pass)
+        {
+            return Passes.Remove(pass);
+        }
+
+        /// <summary>
         /// Finds a previously-added pass of the given type.
         /// </summary>
         public U FindPass<U>() where U : TranslationUnitPass

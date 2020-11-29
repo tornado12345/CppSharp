@@ -13,7 +13,7 @@ namespace CppSharp
 {
     namespace Parser
     {
-        enum struct ParserIntType;
+        enum class ParserIntType;
         ref class ParserTargetInfo;
     }
 }
@@ -22,7 +22,7 @@ namespace CppSharp
 {
     namespace Parser
     {
-        public enum struct ParserIntType
+        public enum class ParserIntType
         {
             NoInt = 0,
             SignedChar = 1,
@@ -49,7 +49,9 @@ namespace CppSharp
             }
 
             ParserTargetInfo(::CppSharp::CppParser::ParserTargetInfo* native);
+            ParserTargetInfo(::CppSharp::CppParser::ParserTargetInfo* native, bool ownNativeInstance);
             static ParserTargetInfo^ __CreateInstance(::System::IntPtr native);
+            static ParserTargetInfo^ __CreateInstance(::System::IntPtr native, bool __ownsNativeInstance);
             ParserTargetInfo();
 
             ParserTargetInfo(CppSharp::Parser::ParserTargetInfo^ _0);

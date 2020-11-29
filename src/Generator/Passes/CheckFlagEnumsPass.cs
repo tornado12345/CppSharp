@@ -8,7 +8,10 @@ namespace CppSharp.Passes
     /// </summary>
     public class CheckFlagEnumsPass : TranslationUnitPass
     {
-        static bool IsFlagEnum(Enumeration @enum)
+        public CheckFlagEnumsPass()
+            => VisitOptions.ResetFlags(VisitFlags.NamespaceEnums);
+
+        private static bool IsFlagEnum(Enumeration @enum)
         {
             // If the enumeration only has power of two values, assume it's
             // a flags enum.

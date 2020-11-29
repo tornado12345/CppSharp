@@ -1,22 +1,13 @@
-﻿using System.Threading;
+﻿using System.Linq;
+using System.Threading;
 using CppSharp.AST;
 
 namespace CppSharp.Passes
 {
     public class FindSymbolsPass : TranslationUnitPass
     {
-        public FindSymbolsPass()
-        {
-            VisitOptions.VisitClassBases = false;
-            VisitOptions.VisitClassTemplateSpecializations = false;
-            VisitOptions.VisitFunctionParameters = false;
-            VisitOptions.VisitFunctionReturnType = false;
-            VisitOptions.VisitNamespaceEnums = false;
-            VisitOptions.VisitNamespaceTemplates = false;
-            VisitOptions.VisitNamespaceTypedefs = false;
-            VisitOptions.VisitTemplateArguments = false;
-            VisitOptions.VisitClassFields = false;
-        }
+        public FindSymbolsPass() => VisitOptions.ResetFlags(
+            VisitFlags.ClassMethods | VisitFlags.ClassProperties);
 
         public bool Wait
         {
@@ -56,19 +47,22 @@ namespace CppSharp.Passes
             if (!Options.CheckSymbols || Options.IsCLIGenerator)
                 return false;
 
-            if (decl.IsDependent)
+            var @class = decl.Namespace as Class;
+            if (@class?.IsDependent == true)
             {
-                var @class = decl.Namespace as Class;
-                if (@class != null && @class.IsDependent)
+                // Search for a match but always go through all
+                switch (decl)
                 {
-                    foreach (var specialization in @class.Specializations)
-                    {
-                        var specializedFunction = specialization.Methods.Find(
-                            m => m.InstantiatedFrom == decl);
-                        if (specializedFunction != null &&
-                            CheckForSymbol(specializedFunction))
-                            return true;
-                    }
+                    case Method _:
+                        return (from specialization in @class.Specializations
+                                from specializedFunction in specialization.Methods
+                                select specializedFunction.InstantiatedFrom == decl &&
+                                    CheckForSymbol(specializedFunction)).DefaultIfEmpty().Max();
+                    case Variable _:
+                        return (from specialization in @class.Specializations
+                                from specializedVariable in specialization.Variables
+                                select specializedVariable.Name == decl.Name &&
+                                    CheckForSymbol(specializedVariable)).DefaultIfEmpty().Max();
                 }
             }
             return CheckForSymbol(decl);
@@ -79,9 +73,7 @@ namespace CppSharp.Passes
             var mangledDecl = decl as IMangledDecl;
             var method = decl as Method;
             if (decl.IsGenerated && mangledDecl != null &&
-                // virtual functions cannot really be inlined and
-                // we don't need their symbols anyway as we call them through the v-table
-                !(method != null && (method.IsVirtual || method.IsSynthetized)) &&
+                method?.NeedsSymbol() == true &&
                 !VisitMangledDeclaration(mangledDecl))
             {
                 decl.ExplicitlyIgnore();
@@ -93,15 +85,14 @@ namespace CppSharp.Passes
 
         private bool VisitMangledDeclaration(IMangledDecl mangledDecl)
         {
-            var symbol = mangledDecl.Mangled;
-
-            if (!Context.Symbols.FindSymbol(ref symbol))
+            if (!Context.Symbols.FindLibraryBySymbol(mangledDecl.Mangled, out _))
             {
-                Diagnostics.Warning("Symbol not found: {0}", symbol);
+                if (mangledDecl is Variable variable && variable.IsConstExpr)
+                    return true;
+
+                Diagnostics.Warning("Symbol not found: {0}", mangledDecl.Mangled);
                 return false;
             }
-
-            mangledDecl.Mangled = symbol;
             return true;
         }
 

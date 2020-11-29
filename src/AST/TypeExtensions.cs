@@ -346,6 +346,12 @@
             return left.Equals(right);
         }
 
+        public static bool IsConstRef(this QualifiedType type)
+        {
+            Type desugared = type.Type.Desugar();
+            return desugared.IsReference() && type.IsConst();
+        }
+
         public static bool IsConstRefToPrimitive(this QualifiedType type)
         {
             Type desugared = type.Type.Desugar();
@@ -355,7 +361,7 @@
                 (pointee.IsPrimitiveType() || pointee.IsEnum()) && type.IsConst();
         }
 
-        private static bool IsConst(this QualifiedType type)
+        public static bool IsConst(this QualifiedType type)
         {
             return type.Type != null && (type.Qualifiers.IsConst ||
                 type.Type.GetQualifiedPointee().IsConst());
@@ -400,6 +406,7 @@
 
             return (pointee.IsPrimitiveType(PrimitiveType.Char) ||
                     pointee.IsPrimitiveType(PrimitiveType.Char16) ||
+                    pointee.IsPrimitiveType(PrimitiveType.Char32) ||
                     pointee.IsPrimitiveType(PrimitiveType.WideChar)) &&
                     pointer.QualifiedPointee.Qualifiers.IsConst;
         }
@@ -428,6 +435,16 @@
                 return null;
 
             return declaration.TranslationUnit.Module;
+        }
+
+        public static long GetSizeInBytes(this ArrayType array)
+        {
+            return GetSizeInBits(array) / 8;
+        }
+
+        public static long GetSizeInBits(this ArrayType array)
+        {
+            return array.Size * array.ElementSize;
         }
     }
 }

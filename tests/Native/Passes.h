@@ -39,8 +39,8 @@ struct TestReadOnlyProperties
 };
 
 #define TEST_ENUM_ITEM_NAME_0 0
-#define TEST_ENUM_ITEM_NAME_1 1
-#define TEST_ENUM_ITEM_NAME_2 2
+#define TEST_ENUM_ITEM_NAME_1 0x1
+#define TEST_ENUM_ITEM_NAME_2 0x2U
 
 // TestStructInheritance
 struct S1 { int F1, F2; };
@@ -84,3 +84,19 @@ enum ConnectionRole
 };
 
 bool ConnectionRoleToString(const ConnectionRole& role, const char* role_str);
+
+class TestFlattenAnonymousTypesToFields
+{
+/* TODO: Enable this code (and respective test in TestPasses).
+public:
+    union
+    {
+        int Public;
+    };
+*/
+protected:
+    union
+    {
+        int Protected;
+    };
+};

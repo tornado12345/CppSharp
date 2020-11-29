@@ -6,10 +6,13 @@
 #include <limits>
 #include <string>
 #include "AnotherUnit.h"
+#include "ExcludedUnit.hpp"
 #include "CSharpTemplates.h"
 
-class DLL_API QString
+struct SmallPOD
 {
+    int a;
+    int b;
 };
 
 class DLL_API Foo
@@ -20,6 +23,8 @@ public:
     Foo(int a, int p = 0);
     Foo(char16_t ch);
     Foo(wchar_t ch);
+    Foo(const Foo& other);
+    ~Foo();
     int method();
     int operator[](int i) const;
     int operator[](unsigned int i);
@@ -34,14 +39,20 @@ public:
     int width();
     void set_width(int value);
     const int& returnConstRef();
+    AbstractTemplate<int>* getAbstractTemplate();
 
     static const int rename = 5;
     static int makeFunctionCall();
     static int propertyCall();
     static int getGetPropertyCall();
 
+    SmallPOD CDECL getSmallPod_cdecl();
+    SmallPOD STDCALL getSmallPod_stdcall();
+    SmallPOD THISCALL getSmallPod_thiscall();
+
     int operator ++();
     int operator --();
+    operator const char*() const;
 
     bool btest[5];
     QFlags<TestFlag> publicFieldMappedToEnum;
@@ -49,6 +60,7 @@ public:
 protected:
     int P;
     TemplateInAnotherUnit<int> templateInAnotherUnit;
+    std::string _name;
 };
 
 class DLL_API Quux
@@ -60,6 +72,7 @@ public:
     Quux(Foo f);
     ~Quux();
 
+    int getPriv() const;
     Foo* setterWithDefaultOverload();
     void setSetterWithDefaultOverload(Foo* value = new Foo());
 
@@ -83,6 +96,8 @@ public:
     Qux* getInterface();
     void setInterface(Qux* qux);
     virtual void makeClassDynamic();
+    virtual int takeReferenceToPointer(Foo*& ret);
+    virtual int type() const;
 };
 
 class DLL_API Bar : public Qux
@@ -96,6 +111,7 @@ public:
     Bar();
     Bar(Qux qux);
     Bar(Items item);
+    ~Bar();
     int method();
     const Foo& operator[](int i) const;
     Foo& operator[](int i);
@@ -107,6 +123,20 @@ public:
     Foo foos[4];
     int getIndex();
     void setIndex(int value);
+    union
+    {
+        int publicInt;
+        double publicDouble;
+    };
+    static const int Type = 4;
+    int type() const override;
+
+protected:
+    enum class ProtectedNestedEnum
+    {
+        Item1,
+        Item2
+    };
 
 private:
     int index;
@@ -119,6 +149,7 @@ class DLL_API ForceCreationOfInterface : public Foo, public Bar
 {
 public:
     ForceCreationOfInterface();
+    ~ForceCreationOfInterface();
 };
 
 class DLL_API Baz : public Foo, public Bar
@@ -134,18 +165,18 @@ public:
 
     Baz();
     Baz(Bar::Items item);
+    ~Baz();
 
     int P;
 
     int takesQux(const Qux& qux);
     Qux returnQux();
-    void setMethod(int value);
+    void setMethod(ProtectedNestedEnum value);
+    int type() const override;
 
     typedef bool (*FunctionTypedef)(const void *);
     FunctionTypedef functionTypedef;
 };
-
-Baz::Baz() : P(5) {}
 
 struct QArrayData
 {
@@ -161,6 +192,7 @@ struct QByteArrayDataPtr
 class DLL_API AbstractProprietor
 {
 public:
+    virtual ~AbstractProprietor();
     virtual int getValue();
     virtual void setValue(int newValue) = 0;
 
@@ -199,8 +231,6 @@ private:
     Bar::Items _items;
     Bar::Items _itemsByValue;
 };
-
-Proprietor::Proprietor() : _items(Bar::Items::Item1), _itemsByValue(Bar::Items::Item1) {}
 
 class DLL_API ComplexType
 {
@@ -250,9 +280,6 @@ struct DLL_API TestDestructors
     TestDestructors();
     ~TestDestructors();
 };
-
-TestDestructors::TestDestructors() { Marker = 0xf00d; }
-TestDestructors::~TestDestructors() { Marker = 0xcafe; }
 
 class DLL_API TestCopyConstructorVal
 {
@@ -383,6 +410,9 @@ enum class Empty : unsigned long long int
 {
 };
 
+class _ClassWithLeadingUnderscore {
+};
+
 class DLL_API MethodsWithDefaultValues : public Quux
 {
 public:
@@ -406,7 +436,7 @@ public:
     void defaultVoidStar(void* ptr = 0);
     void defaultFunctionPointer(void(*functionPtr)(int p) = nullptr);
     void defaultValueType(QGenericArgument valueType = QGenericArgument());
-    void defaultChar(char c = 'a');
+    void defaultChar(char c = 'a', char uc = u'u', char Uc = U'U', char Lc = L'L');
     void defaultEmptyChar(char c = 0);
     void defaultEmptyEnum(Empty e = Empty(-1));
     void defaultRefTypeBeforeOthers(Foo foo = Foo(), int i = 5, Bar::Items item = Bar::Item2);
@@ -423,7 +453,7 @@ public:
     void defaultMappedToZeroEnum(QFlags<Flags> qFlags = 0);
     void defaultMappedToEnumAssignedWithCtor(QFlags<Flags> qFlags = QFlags<Flags>());
     void defaultZeroMappedToEnumAssignedWithCtor(DefaultZeroMappedToEnum defaultZeroMappedToEnum = DefaultZeroMappedToEnum());
-    void defaultImplicitCtorInt(Quux arg = 0);
+    Quux defaultImplicitCtorInt(Quux arg = 0);
     void defaultImplicitCtorChar(Quux arg = 'a');
     void defaultImplicitCtorFoo(Quux arg = Foo());
     // this looks the same test as 'defaultRefTypeEnumImplicitCtor' two lines below
@@ -451,6 +481,7 @@ public:
     void defaultWithCharFromInt(char c = 32);
     void defaultWithFreeConstantInNameSpace(int c = HasFreeConstant::FREE_CONSTANT_IN_NAMESPACE);
     void defaultWithStdNumericLimits(double d = 1.0, int i = std::numeric_limits<double>::infinity());
+    void defaultWithParamRequiringRename(_ClassWithLeadingUnderscore* ptr = nullptr);
     int DefaultWithParamNamedSameAsMethod(int DefaultWithParamNamedSameAsMethod, const Foo& defaultArg = Foo());
     int getA();
 private:
@@ -460,6 +491,7 @@ private:
 class DLL_API HasPureVirtualWithDefaultArg
 {
 public:
+    virtual ~HasPureVirtualWithDefaultArg();
     virtual void pureVirtualWithDefaultArg(Foo* foo = nullptr) = 0;
 };
 
@@ -502,6 +534,7 @@ public:
 class DLL_API AbstractWithProperty
 {
 public:
+    virtual ~AbstractWithProperty();
     virtual int property() = 0;
 };
 
@@ -511,6 +544,17 @@ class DLL_API IgnoredType
 
 class DLL_API IgnoredTypeInheritingNonIgnoredWithNoEmptyCtor : public P
 {
+};
+
+class DLL_API HasOverriddenInManaged
+{
+public:
+    HasOverriddenInManaged();
+    ~HasOverriddenInManaged();
+    void setOverriddenInManaged(Baz *value);
+    int callOverriddenInManaged();
+private:
+    Baz* overriddenInManaged = 0;
 };
 
 class DLL_API PropertyWithIgnoredType
@@ -531,31 +575,31 @@ struct DLL_API MI_A0
     int F;
 };
 
-MI_A0::MI_A0() : F(50) {}
-int MI_A0::get() { return F; };
-
 struct DLL_API MI_A
 {
     MI_A();
     virtual void v(int i = 5);
 };
 
-MI_A::MI_A() {}
-void MI_A::v(int i) {}
-
 struct DLL_API MI_B : public MI_A
 {
     MI_B();
 };
-
-MI_B::MI_B() {}
 
 struct DLL_API MI_C : public MI_A0, public MI_B
 {
     MI_C();
 };
 
-MI_C::MI_C() {}
+struct DLL_API MI_A1
+{
+    MI_A1();
+};
+
+struct DLL_API MI_D : public MI_A1, public MI_C
+{
+    MI_D();
+};
 
 class DLL_API StructWithPrivateFields
 {
@@ -621,16 +665,6 @@ struct DLL_API TestPointers
     const char** Names;
 };
 
-void TestPointers::TestDoubleCharPointers(const char** names)
-{
-
-}
-
-void TestPointers::TestTripleCharPointers(const char*** names)
-{
-
-}
-
 class DLL_API HasVirtualDtor1
 {
 public:
@@ -686,6 +720,7 @@ class DLL_API TestOverrideFromSecondaryBase : public Foo, public SecondaryBase
 {
 public:
     TestOverrideFromSecondaryBase();
+    ~TestOverrideFromSecondaryBase();
     void VirtualMember();
     void setProperty(int value);
 };
@@ -726,12 +761,14 @@ class DLL_API InheritanceBuffer : public Foo, public HasProtectedVirtual
 {
 public:
     InheritanceBuffer();
+    ~InheritanceBuffer();
 };
 
 class DLL_API InheritsProtectedVirtualFromSecondaryBase : public InheritanceBuffer
 {
 public:
     InheritsProtectedVirtualFromSecondaryBase();
+    ~InheritsProtectedVirtualFromSecondaryBase();
 protected:
     void protectedVirtual();
 };
@@ -804,19 +841,25 @@ public:
 class DLL_API TestOutTypeInterfaces
 {
 public:
+    TestOutTypeInterfaces();
     void funcTryInterfaceTypePtrOut(CS_OUT TestParamToInterfacePassBaseTwo* classTry);
     void funcTryInterfaceTypeOut(CS_OUT TestParamToInterfacePassBaseTwo classTry);
 };
 
 template <typename T>
-class TemplateWithDependentField
+class DLL_API TemplateWithDependentField
 {
 public:
     TemplateWithDependentField();
     T t;
 };
 
-class DerivesFromTemplateInstantiation : public TemplateWithDependentField<int>
+template <typename T>
+TemplateWithDependentField<T>::TemplateWithDependentField()
+{
+}
+
+class DLL_API DerivesFromTemplateInstantiation : public TemplateWithDependentField<int>
 {
 public:
     DerivesFromTemplateInstantiation();
@@ -837,6 +880,7 @@ class DLL_API OverridePropertyFromIndirectPrimaryBaseBase
 {
 public:
     OverridePropertyFromIndirectPrimaryBaseBase();
+    virtual ~OverridePropertyFromIndirectPrimaryBaseBase();
     virtual int property() = 0;
     virtual void setProperty(int value) = 0;
 };
@@ -859,6 +903,7 @@ class DLL_API AbstractOverrideFromSecondaryBase : public Foo, public OverridePro
 {
 public:
     AbstractOverrideFromSecondaryBase();
+    virtual ~AbstractOverrideFromSecondaryBase();
     virtual void setProperty(int value) = 0;
 };
 
@@ -915,6 +960,7 @@ class InheritsFromHasSamePropertyInDerivedAbstractType : public HasSamePropertyI
 {
 public:
     InheritsFromHasSamePropertyInDerivedAbstractType();
+    virtual ~InheritsFromHasSamePropertyInDerivedAbstractType();
     virtual int property() = 0;
 };
 
@@ -968,8 +1014,10 @@ namespace NamespaceB
 	};
 }
 
-class HasPrivateVirtualProperty
+class DLL_API HasPrivateVirtualProperty
 {
+public:
+    virtual ~HasPrivateVirtualProperty();
 private:
     virtual int property();
     virtual void protectedAbstractMethod() = 0;
@@ -977,7 +1025,7 @@ private:
     virtual int protectedProperty() = 0;
 };
 
-class HasPrivateOverriddenProperty : public HasPrivateVirtualProperty
+class DLL_API HasPrivateOverriddenProperty : public HasPrivateVirtualProperty
 {
 protected:
     virtual void protectedAbstractMethod();
@@ -987,7 +1035,7 @@ private:
     virtual int property();
 };
 
-class HasConflictWithProperty
+class DLL_API HasConflictWithProperty
 {
 public:
     int conflictWithProperty();
@@ -1000,9 +1048,10 @@ struct iterator_category_with_traversal : Category, Traversal
 };
 
 
-class HasConflictWithAbstractProperty
+class DLL_API HasConflictWithAbstractProperty
 {
 public:
+    virtual ~HasConflictWithAbstractProperty();
     int conflictWithProperty();
     virtual int getConflictWithProperty() = 0;
 };
@@ -1035,6 +1084,57 @@ public:
 DLL_API extern const unsigned char variableWithFixedPrimitiveArray[2];
 DLL_API extern const unsigned int variableWithVariablePrimitiveArray[];
 
+class DLL_API StaticVariables {
+public:
+    static const bool Boolean;
+    static const char Chr;
+    static const unsigned char UChr;
+    static const int Int;
+    static const float Float;
+    static const std::string String;
+    static const char ChrArray[2];
+    static const int IntArray[2];
+    static const float FloatArray[2];
+    static const bool BoolArray[2];
+    static const void* VoidPtrArray[2];
+};
+
+DLL_API constexpr double ConstexprCreateDoubleValue(double value) {
+    return value;
+}
+
+class DLL_API VariablesWithInitializer {
+public:
+   static constexpr const char* String = "Str";
+   static constexpr const wchar_t* WideString = L"Str";
+   static constexpr bool Boolean = true;
+   static constexpr char Chr = 'G';
+   static constexpr unsigned char UChr = (unsigned char)'G';
+   static constexpr int Int = 1020304050;
+   static constexpr int IntSum = Int + 500;
+   static constexpr float Float = 0.5020f;
+   static constexpr double Double = 0.700020235;
+   static constexpr double DoubleSum = 0.700020235 + 23.17376;
+   static constexpr double DoubleFromConstexprFunction = ConstexprCreateDoubleValue(0.700020235 + 23.17376);
+   static constexpr int64_t Int64 = 602030405045;
+   static constexpr uint64_t UInt64 = 9602030405045;
+   static constexpr const char* StringArray1[1] { "Str" "F,\"or" };
+   static constexpr const char* StringArray3[3] { "Str" "F,\"or", "C#", String };
+   static constexpr const char* StringArray30[30] {
+       "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", 
+       "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", 
+       "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", "Str", 
+   };
+   static constexpr const char* StringArray3EmptyInitList[3] { };
+   static constexpr const wchar_t* WideStringArray[2] { L"Str", L"C#" };
+   static constexpr char ChrArray[2] { 'A', 'B' };
+   static constexpr unsigned char ByteArray[2] { 'A', 10 };
+   static constexpr int IntArray[2] = { 1020304050, 1526374850 };
+   static constexpr int IntArray3[3] = { 1020304050, 1526374850 };
+   static constexpr bool BoolArray[2] { false, true };
+   static constexpr float FloatArray[2] { 0.5020f, 0.6020f };
+};
+
 typedef void (*ALLCAPS_UNDERSCORES)(int i);
 
 class DLL_API TestString
@@ -1046,10 +1146,10 @@ public:
     wchar_t* unicode;
 };
 
-void decltypeFunctionPointer();
+DLL_API void decltypeFunctionPointer();
 
 using funcPtr = decltype(&decltypeFunctionPointer);
-void usesDecltypeFunctionPointer(funcPtr func);
+DLL_API void usesDecltypeFunctionPointer(funcPtr func);
 
 class DLL_API PrimaryBaseWithAbstractWithDefaultArg
 {
@@ -1188,8 +1288,9 @@ struct StructTestArrayTypeFromTypedef
 #define MY_MACRO_TEST2_4     (1 << 3)
 #define MY_MACRO_TEST2_ALL   (1 << 4) - 1
 
-struct ComplexArrayElement
+struct DLL_API ComplexArrayElement
 {
+    ComplexArrayElement();
     bool BoolField;
     uint32_t IntField;
     float FloatField;
@@ -1197,33 +1298,24 @@ struct ComplexArrayElement
 
 #define ARRAY_LENGTH_MACRO 10
 
-struct HasComplexArray
+struct DLL_API HasComplexArray
 {
+    HasComplexArray();
     ComplexArrayElement complexArray[ARRAY_LENGTH_MACRO];
 };
 
 class DLL_API TestIndexedProperties
 {
 public:
+    TestIndexedProperties();
     mutable int field;
     int operator[](const int& key);
     void* operator[](size_t n) const;
 };
 
-int TestIndexedProperties::operator[](const int& key)
-{
-    return key;
-}
-
-void* TestIndexedProperties::operator[](size_t n) const
-{
-    field = n;
-    return &field;
-}
-
 extern const ComplexArrayElement ArrayOfVariableSize[];
 
-void useStdStringJustAsParameter(std::string s);
+DLL_API void useStdStringJustAsParameter(std::string s);
 
 typedef int (typedefedFuncPtr)(Foo* a, Bar b);
 int DLL_API funcWithTypedefedFuncPtrAsParam(typedefedFuncPtr* func);
@@ -1299,5 +1391,121 @@ private:
     SimpleInterface* interface;
 };
 
+class DLL_API HasFunctionPtrField
+{
+public:
+    HasFunctionPtrField();
+    ~HasFunctionPtrField();
+    int (*functionPtrField)(const char*);
+    int (*functionPtrTakeFunctionPtrField)(int(*TakenInFuncPtrField)());
+};
+
 DLL_API void va_listFunction(va_list v);
 DLL_API char* returnCharPointer();
+DLL_API char* takeCharPointer(char* c);
+DLL_API char* takeConstCharRef(const char& c);
+DLL_API const char*& takeConstCharStarRef(const char*& c);
+DLL_API const void*& rValueReferenceToPointer(void*&& v);
+DLL_API const Foo*& takeReturnReferenceToPointer(const Foo*& foo);
+
+struct {
+    struct {
+        struct {
+            int(*forIntegers)(int b, short s, unsigned int i);
+            struct {
+                int i;
+            } APIHost;
+            struct {
+                int i;
+            } Method;
+        } example;
+    } root;
+} kotlin;
+
+typedef int boolean_t;
+DLL_API boolean_t takeTypemapTypedefParam(boolean_t b);
+
+class DLL_API TestAnonymousMemberNameCollision : public ClassUsingUnion {
+
+};
+
+namespace CXXRecordDeclWithoutDefinition
+{
+    template<typename... T>
+    struct list;
+
+    template<typename T>
+    struct it;
+
+    template <> struct it<list<>> { };
+    template <> struct it<list<> const> { };
+}
+
+template<int... n>
+struct TestVariableWithoutType
+{
+    template<typename... Args>
+    static constexpr int create(Args... args)
+    {
+        return {};
+    }
+
+    static constexpr auto variable = create(n...);
+};
+
+struct DLL_API ConversionFunctions
+{
+    ConversionFunctions();
+    operator short* ();
+    operator short& ();
+    operator short();
+    operator const short*() const;
+    operator const short&() const;
+    operator const short() const;
+
+    short field = 100;
+};
+
+struct DLL_API ClassCustomTypeAlignment 
+{
+    struct alignas(1) Align1 { };    
+    struct alignas(8) Align8 { };
+    struct alignas(16) Align16 {
+        double a;
+        double b;
+    };
+
+    bool boolean;
+    Align16 align16;
+    Align1 align1;    
+    double dbl;
+    Align8 align8;
+};
+
+struct DLL_API ClassCustomObjectAlignment
+{
+    bool boolean;
+    alignas(alignof(ClassCustomTypeAlignment)) char charAligned8;
+};
+
+struct DLL_API ClassMicrosoftObjectAlignmentBase
+{
+    uint8_t u8;
+    double dbl;
+    int16_t i16;
+    virtual void Method() { }
+};
+
+struct DLL_API ClassMicrosoftObjectAlignment : ClassMicrosoftObjectAlignmentBase
+{
+    bool boolean;
+};
+
+DLL_API extern const unsigned ClassCustomTypeAlignmentOffsets[5];
+DLL_API extern const unsigned ClassCustomObjectAlignmentOffsets[2];
+DLL_API extern const unsigned ClassMicrosoftObjectAlignmentOffsets[4];
+
+DLL_API const char* TestCSharpString(const char* in, CS_OUT const char** out);
+DLL_API const wchar_t* TestCSharpStringWide(const wchar_t* in, CS_OUT const wchar_t** out);
+DLL_API const char16_t* TestCSharpString16(const char16_t* in, CS_OUT const char16_t** out);    
+DLL_API const char32_t* TestCSharpString32(const char32_t* in, CS_OUT const char32_t** out);

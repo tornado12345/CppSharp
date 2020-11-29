@@ -70,10 +70,12 @@ namespace CppSharp.Generator.Tests.Passes
             passBuilder.AddPass(new CleanCommentsPass());
             passBuilder.RunPasses(pass => pass.VisitDeclaration(c));
 
-            var para = (ParagraphComment)c.Comment.FullComment.Blocks[0];
-            var s = para.CommentToString(CommentKind.BCPLSlash);
+            var para = (ParagraphComment) c.Comment.FullComment.Blocks[0];
+            var textGenerator = new TextGenerator();
+            textGenerator.Print(para, CommentKind.BCPLSlash);
 
-            Assert.That(s, Is.EqualTo("/// <summary>A simple test.</summary>"));
+            Assert.That(textGenerator.StringBuilder.ToString().Trim(),
+                Is.EqualTo("/// <summary>A simple test.</summary>"));
         }
 
         [Test]
@@ -106,6 +108,11 @@ namespace CppSharp.Generator.Tests.Passes
             var @enum = AstContext.Enum("TestEnumItemName");
             Assert.IsNotNull(@enum);
 
+            // Testing the values read for the enum
+            Assert.AreEqual(0, @enum.Items[0].Value); // Decimal literal
+            Assert.AreEqual(1, @enum.Items[1].Value); // Hex literal
+            Assert.AreEqual(2, @enum.Items[2].Value); // Hex literal with suffix
+
             passBuilder.RemovePrefix("TEST_ENUM_ITEM_NAME_", RenameTargets.EnumItem);
             passBuilder.AddPass(new CleanInvalidDeclNamesPass());
             passBuilder.RunPasses(pass => pass.VisitASTContext(AstContext));
@@ -133,7 +140,7 @@ namespace CppSharp.Generator.Tests.Passes
             Assert.AreEqual(4, unnamedEnum2.Items[1].Value);
         }
 
-        [Test]
+        [Test, Ignore("Nameless enums are no longer uniquely named.")]
         public void TestUniqueNamesAcrossTranslationUnits()
         {
             passBuilder.AddPass(new CleanInvalidDeclNamesPass());
@@ -179,21 +186,17 @@ namespace CppSharp.Generator.Tests.Passes
             Assert.IsNotNull(@class);
             var overloads = @class.Methods.Where(m => m.Name == "Method");
             var constMethod = overloads
-                .Where(m => m.IsConst && m.Parameters.Count == 0)
-                .FirstOrDefault();
+                .FirstOrDefault(m => m.IsConst && m.Parameters.Count == 0);
             var nonConstMethod = overloads
-                .Where(m => !m.IsConst && m.Parameters.Count == 0)
-                .FirstOrDefault();
+                .FirstOrDefault(m => !m.IsConst && m.Parameters.Count == 0);
             Assert.IsNotNull(constMethod);
             Assert.IsNotNull(nonConstMethod);
             Assert.IsTrue(constMethod.GenerationKind == GenerationKind.None);
             Assert.IsTrue(nonConstMethod.GenerationKind == GenerationKind.Generate);
             var constMethodWithParam = overloads
-                .Where(m => m.IsConst && m.Parameters.Count == 1)
-                .FirstOrDefault();
+                .FirstOrDefault(m => m.IsConst && m.Parameters.Count == 1);
             var nonConstMethodWithParam = overloads
-                .Where(m => !m.IsConst && m.Parameters.Count == 1)
-                .FirstOrDefault();
+                .FirstOrDefault(m => !m.IsConst && m.Parameters.Count == 1);
             Assert.IsNotNull(constMethodWithParam);
             Assert.IsNotNull(nonConstMethodWithParam);
             Assert.IsTrue(constMethodWithParam.GenerationKind == GenerationKind.None);
@@ -219,11 +222,29 @@ namespace CppSharp.Generator.Tests.Passes
         [Test]
         public void TestAbstractOperator()
         {
-            passBuilder.AddPass(new CheckOperatorsOverloadsPass());
+            passBuilder.AddPass(new ValidateOperatorsPass());
             passBuilder.RunPasses(pass => pass.VisitASTContext(AstContext));
 
             var @class = AstContext.FindDecl<Class>("ClassWithAbstractOperator").First();
             Assert.AreEqual(@class.Operators.First().GenerationKind, GenerationKind.None);
+        }
+
+        [Test]
+        public void TestFlattenAnonymousTypesToFields()
+        {
+            passBuilder.AddPass(new FlattenAnonymousTypesToFields());
+            passBuilder.RunPasses(pass => pass.VisitASTContext(AstContext));
+
+            var @class = AstContext.FindDecl<Class>("TestFlattenAnonymousTypesToFields").First();
+
+            /* TODO: Enable this test and fix the parsing bug
+            var @public = @class.Fields.Where(f => f.Name == "Public").FirstOrDefault();
+            Assert.IsNotNull(@public);
+            Assert.AreEqual(AccessSpecifier.Public, @public.Access); */
+
+            var @protected = @class.Fields.Find(f => f.Name == "Protected");
+            Assert.IsNotNull(@protected);
+            Assert.AreEqual(AccessSpecifier.Protected, @protected.Access);
         }
     }
 }

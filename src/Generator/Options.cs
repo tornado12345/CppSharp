@@ -8,6 +8,12 @@ using CppSharp.Generators;
 
 namespace CppSharp
 {
+    public enum GenerationOutputMode
+    {
+        FilePerModule,
+        FilePerUnit
+    }
+
     public class DriverOptions
     {
         public DriverOptions()
@@ -19,8 +25,6 @@ namespace CppSharp
 
             GeneratorKind = GeneratorKind.CSharp;
             OutputInteropIncludes = true;
-
-            Encoding = Encoding.ASCII;
 
             StripLibPrefix = true;
 
@@ -125,9 +129,11 @@ namespace CppSharp
         /// </summary>
         public CommentKind? CommentKind;
 
-        public Encoding Encoding { get; set; }
+        public Encoding Encoding { get; set; } = Encoding.UTF8;
 
         public bool IsCSharpGenerator => GeneratorKind == GeneratorKind.CSharp;
+
+        public bool IsCppGenerator => GeneratorKind == GeneratorKind.CPlusPlus;
 
         public bool IsCLIGenerator => GeneratorKind == GeneratorKind.CLI;
 
@@ -137,12 +143,38 @@ namespace CppSharp
         /// <summary>
         /// Generates a single C# file.
         /// </summary>
-        public bool GenerateSingleCSharpFile { get; set; } = true;
+        [Obsolete("Use the more general GenerationOutputMode property instead.")]
+        public bool GenerateSingleCSharpFile
+        {
+            get { return GenerationOutputMode == GenerationOutputMode.FilePerModule; }
+
+            set
+            {
+                GenerationOutputMode = value ? GenerationOutputMode.FilePerModule
+                    : GenerationOutputMode.FilePerUnit;
+            }
+        }
+
+        /// <summary>
+        /// Sets the generation output mode which affects how output files are
+        /// generated, either as one output file per binding module, or as one
+        /// output file for each input translation unit.
+        /// Note: Currently only available for C# generator.
+        /// </summary>
+        public GenerationOutputMode GenerationOutputMode { get; set; } =
+            GenerationOutputMode.FilePerModule;
 
         /// <summary>
         /// Generates default values of arguments in the C# code.
         /// </summary>
         public bool GenerateDefaultValuesForArguments { get; set; }
+
+        /// <summary>
+        /// If set to false, then deprecated C/C++ declarations (those that have
+        /// the `__attribute__((deprecated))` or equivalent attribute) will not be
+        /// generated.
+        /// </summary>
+        public bool GenerateDeprecatedDeclarations { get; set; } = true;
 
         public bool StripLibPrefix { get; set; }
 

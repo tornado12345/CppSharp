@@ -153,8 +153,8 @@ public:
     Stmt(StmtClass klass);
     StmtClass stmtClass;
     SourceRange sourceRange;
+    SourceLocation beginLoc;
     SourceLocation endLoc;
-    Stmt* stripLabelLikeStatements;
 };
 
 class CS_API DeclStmt : public Stmt

@@ -1,0 +1,63 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { os: ubuntu-20.04, platform: x64, cxx: g++-10, cc: gcc-10 }
+          - { os: macos-10.15, platform: x64, cxx: clang++, cc: clang }
+          - { os: windows-2019, platform: x86, vs: msvc }
+          - { os: windows-2019, platform: x64, vs: msvc }
+
+    runs-on: ${{ matrix.config.os }}
+
+    env:
+      CC: ${{ matrix.config.cc }}
+      CXX: ${{ matrix.config.cxx }}
+      PLATFORM: ${{ matrix.config.platform }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Environment
+        if: matrix.config.vs
+        shell: bash
+        run: echo "/c/Program Files (x86)/Microsoft Visual Studio/2019/Enterprise/MSBuild/Current/Bin" >> $GITHUB_PATH
+
+      - name: Fix intrin.h file
+        if: matrix.config.vs
+        shell: powershell
+        run: build/intrin.ps1
+
+      - name: Setup
+        shell: bash
+        run: |
+          build/build.sh generate -platform $PLATFORM
+          build/build.sh download_llvm -platform $PLATFORM
+
+      - name: Restore
+        shell: bash
+        run: build/build.sh restore -platform $PLATFORM
+
+      - name: Build
+        shell: bash
+        run: build/build.sh -platform $PLATFORM -build_only
+
+      - name: Test
+        shell: bash
+        run: build/test.sh -platform $PLATFORM
+
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v2
+        with:
+          name: cppsharp-${{ matrix.config.os }}-${{ matrix.config.platform }}-${{ matrix.config.cc }}
+          path: |
+            bin/**/CppSharp*
+            bin/**/Std-symbols*
+            bin/**/lib/**
+            include/**/*.h

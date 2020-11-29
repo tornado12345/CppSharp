@@ -37,6 +37,10 @@ TestPacking8::~TestPacking8()
 {
 }
 
+Foo::NestedAbstract::~NestedAbstract()
+{
+}
+
 Foo::Foo()
 {
     auto p = new int[4];
@@ -46,9 +50,22 @@ Foo::Foo()
     SomePointerPointer = &SomePointer;
 }
 
+Foo::Foo(const Foo& other) : A(other.A), B(other.B)
+{
+}
+
 Foo::Foo(Private p)
 {
 }
+
+Foo::Foo(const float& f)
+{
+    B = f;
+}
+
+const int Foo::unsafe = 10;
+const char Foo::charArray[] = "abc";
+int Foo::readWrite = 15;
 
 const char* Foo::GetANSI()
 {
@@ -80,6 +97,8 @@ char16_t Foo::returnChar16()
 }
 
 Foo2::Foo2() {}
+
+Foo2::Foo2(const Foo2& other) : Foo(other), C(other.C), valueTypeField(other.valueTypeField) {}
 
 Foo2 Foo2::operator<<(signed int i)
 {
@@ -134,6 +153,10 @@ bool Bar::operator ==(const Bar& arg1) const
 bool operator ==(Bar::Item item, const Bar& bar)
 {
     return item == bar.RetItem1();
+}
+
+Bar2::Nested::Nested()
+{
 }
 
 Bar2::Nested::operator int() const
@@ -256,13 +279,13 @@ bool Hello::TestPrimitiveOutRef(CS_OUT float& f)
     return true;
 }
 
-bool Hello::TestPrimitiveInOut(CS_IN_OUT int* i)
+bool Hello::TestPrimitiveInOut(int* i)
 {
     *i += 10;
     return true;
 }
 
-bool Hello::TestPrimitiveInOutRef(CS_IN_OUT int& i)
+bool Hello::TestPrimitiveInOutRef(int& i)
 {
     i += 10;
     return true;
@@ -278,16 +301,16 @@ void Hello::EnumOutRef(int value, CS_OUT Enum& e)
     e = (Enum)value;
 }
 
-void Hello::EnumInOut(CS_IN_OUT Enum* e)
+void Hello::EnumInOut(Enum* e)
 {
-        if (*e == Enum::E)
-                *e = Enum::F;
+    if (*e == Enum::E)
+        *e = Enum::F;
 }
 
-void Hello::EnumInOutRef(CS_IN_OUT Enum& e)
+void Hello::EnumInOutRef(Enum& e)
 {
-        if (e == Enum::E)
-                e = Enum::F;
+    if (e == Enum::E)
+        e = Enum::F;
 }
 
 void Hello::StringOut(CS_OUT const char** str)
@@ -335,6 +358,10 @@ Bar indirectReturn()
     return Bar();
 }
 
+TestDelegates::TestDelegates() : A(Double), B(Double), C(&TestDelegates::Triple)
+{
+}
+
 int TestDelegates::Double(int N)
 {
     return N * 2;
@@ -355,6 +382,10 @@ int TestDelegates::CDecl(DelegateCDecl del)
     return del(1);
 }
 
+AbstractFoo::~AbstractFoo()
+{
+}
+
 int ImplementsAbstractFoo::pureFunction(typedefInOverride i)
 {
     return 5;
@@ -372,14 +403,24 @@ int ImplementsAbstractFoo::pureFunction2(bool* ok)
 
 ReturnsAbstractFoo::ReturnsAbstractFoo() {}
 
+ReturnsAbstractFoo::~ReturnsAbstractFoo() {}
+
 const AbstractFoo& ReturnsAbstractFoo::getFoo()
 {
     return i;
 }
 
+Exception::~Exception()
+{
+}
+
 Ex2* DerivedException::clone()
 {
     return 0;
+}
+
+DefaultParameters::DefaultParameters()
+{
 }
 
 void DefaultParameters::Foo(int a, int b)
@@ -398,17 +439,55 @@ void DefaultParameters::Bar()
 {
 }
 
+common::common()
+{
+}
+
 int test(common& s)
 {
     return 5;
 }
 
-Bar::Item operator |(Bar::Item left, Bar::Item right)
+int operator *(TestMoveOperatorToClass klass, int b)
 {
-    return left | right;
+    return klass.A * b;
+}
+
+TestMoveOperatorToClass::TestMoveOperatorToClass() 
+{
+}
+
+TestMoveOperatorToClass operator-(const TestMoveOperatorToClass& b)
+{
+    TestMoveOperatorToClass nb;
+    nb.A = -b.A;
+    nb.B = -b.B;
+    return nb;
+}
+
+TestMoveOperatorToClass operator+(const TestMoveOperatorToClass& b1,
+    const TestMoveOperatorToClass& b2)
+{
+    TestMoveOperatorToClass b;
+    b.A = b1.A + b2.A;
+    b.B = b1.B + b2.B;
+    return b;
+}
+
+int operator==(const Foo2& a, const Foo2& b)
+{
+    return 0;
 }
 
 void va_listFunction(va_list v)
+{
+}
+
+TestNestedTypes::TestNestedTypes()
+{
+}
+
+TestNestedTypes::~TestNestedTypes()
 {
 }
 
@@ -474,6 +553,20 @@ ClassD::ClassD(int value)
 {
 }
 
+decltype(Expr) TestDecltype()
+{
+    return Expr;
+}
+
+void TestNullPtrType(decltype(nullptr))
+{
+}
+
+decltype(nullptr) TestNullPtrTypeRet()
+{
+    return nullptr;
+}
+
 void DelegateNamespace::Nested::f1(void (*)())
 {
 }
@@ -514,9 +607,44 @@ std::string& HasStdString::getStdString()
     return s;
 }
 
-TestProperties::TestProperties() : Field(0), _refToPrimitiveInSetter(0),
-    _getterAndSetterWithTheSameName(0), _setterReturnsBoolean(0), _virtualSetterReturnsBoolean(0)
+SomeNamespace::AbstractClass::~AbstractClass()
 {
+}
+
+int Function()
+{
+    return 5;
+}
+
+TestProperties::TestProperties() : Field(0), ArchiveName(0),
+    FieldValue(0), _refToPrimitiveInSetter(0),
+    _getterAndSetterWithTheSameName(0), _setterReturnsBoolean(0),
+    _virtualSetterReturnsBoolean(0), _conflict(Conflict::Value1),
+    ConstRefField(Field)
+{
+}
+
+TestProperties::TestProperties(const TestProperties& other) :
+    Field(other.Field), ArchiveName(other.ArchiveName),
+    FieldValue(other.FieldValue),
+    _refToPrimitiveInSetter(other._refToPrimitiveInSetter),
+    _getterAndSetterWithTheSameName(other._getterAndSetterWithTheSameName),
+    _setterReturnsBoolean(other._setterReturnsBoolean),
+    _virtualSetterReturnsBoolean(other._virtualSetterReturnsBoolean),
+    _conflict(other._conflict), ConstRefField(other.ConstRefField)
+{
+}
+
+TestProperties& TestProperties::operator=(const TestProperties& other)
+{
+    Field = other.Field;
+    FieldValue = other.FieldValue;
+    _refToPrimitiveInSetter = other._refToPrimitiveInSetter;
+    _getterAndSetterWithTheSameName = other._getterAndSetterWithTheSameName;
+    _setterReturnsBoolean = other._setterReturnsBoolean;
+    _virtualSetterReturnsBoolean = other._virtualSetterReturnsBoolean;
+    _conflict = other._conflict;
+    return *this;
 }
 
 int TestProperties::getFieldValue()
@@ -558,7 +686,21 @@ void TestProperties::getterAndSetterWithTheSameName(int value)
     _getterAndSetterWithTheSameName = value;
 }
 
+int TestProperties::get() const
+{
+    return 3;
+}
+
 void TestProperties::set(int value)
+{
+}
+
+int TestProperties::Get() const
+{
+    return 3;
+}
+
+void TestProperties::Set(int value)
 {
 }
 
@@ -567,7 +709,7 @@ int TestProperties::setterReturnsBoolean()
     return _setterReturnsBoolean;
 }
 
-bool TestProperties::setterReturnsBoolean(int value)
+bool TestProperties::setSetterReturnsBoolean(int value)
 {
     bool changed = _setterReturnsBoolean != value;
     _setterReturnsBoolean = value;
@@ -596,6 +738,79 @@ int TestProperties::nestedEnum(int i)
     return i;
 }
 
+int TestProperties::get32Bit()
+{
+    return 10;
+}
+
+bool TestProperties::isEmpty()
+{
+    return empty();
+}
+
+bool TestProperties::empty()
+{
+    return false;
+}
+
+int TestProperties::virtualGetter()
+{
+    return 15;
+}
+
+int TestProperties::startWithVerb()
+{
+    return 25;
+}
+
+void TestProperties::setStartWithVerb(int value)
+{
+}
+
+void TestProperties::setSetterBeforeGetter(bool value)
+{
+}
+
+bool TestProperties::isSetterBeforeGetter()
+{
+    return true;
+}
+
+bool TestProperties::contains(char c)
+{
+    return true;
+}
+
+bool TestProperties::contains(const char* str)
+{
+    return true;
+}
+
+TestProperties::Conflict TestProperties::GetConflict()
+{
+    return _conflict;
+}
+
+void TestProperties::SetConflict(Conflict conflict)
+{
+    _conflict = conflict;
+}
+
+int(*TestProperties::getCallback())(int)
+{
+    return _callback;
+}
+
+void TestProperties::setCallback(int(*value)(int))
+{
+    _callback = value;
+}
+
+int TestProperties::GetArchiveName() const
+{
+    return 20;
+}
+
 HasOverridenSetter::HasOverridenSetter()
 {
 }
@@ -614,6 +829,41 @@ bool HasOverridenSetter::setVirtualSetterReturnsBoolean(int value)
     return TestProperties::setVirtualSetterReturnsBoolean(value);
 }
 
+int HasOverridenSetter::virtualGetter()
+{
+    return 20;
+}
+
+void HasOverridenSetter::setVirtualGetter(int value)
+{
+}
+
+TestIndexedProperties::TestIndexedProperties() : p(1), f()
+{
+}
+
+foo_t& TestIndexedProperties::operator[](int i) { return p; }
+const TestProperties& TestIndexedProperties::operator[](short b) { return f; }
+foo_t TestIndexedProperties::operator[](const char* name) { return p; }
+foo_t* TestIndexedProperties::operator[](float f) { return &p; }
+TestProperties* TestIndexedProperties::operator[](unsigned char b) { return &f; }
+Bar& TestIndexedProperties::operator[](unsigned long i)
+{
+    return bar;
+}
+Bar& TestIndexedProperties::operator[](const TypeMappedIndex& key)
+{
+    return bar;
+}
+
+const foo_t& TestIndexedProperties::operator[](double f) { return p; }
+foo_t TestIndexedProperties::operator[](TestProperties b) { return p; }
+
+int TestIndexedProperties::operator[](CS_OUT char key)
+{
+    return key;
+}
+
 TypeMappedIndex::TypeMappedIndex()
 {
 }
@@ -622,6 +872,23 @@ Bar& TestIndexedProperties::operator[](const Foo& key)
 {
     return bar;
 }
+
+TestVariables::TestVariables()
+{
+}
+
+int TestVariables::VALUE;
+void TestVariables::SetValue(int value) { VALUE = value; }
+
+TestWideStrings::TestWideStrings()
+{
+}
+
+LPCWSTR TestWideStrings::GetWidePointer() { return L"Hello"; }
+
+LPCWSTR TestWideStrings::GetWideNullPointer() { return 0; }
+
+TestFixedArrays::TestFixedArrays() {}
 
 InternalCtorAmbiguity::InternalCtorAmbiguity(void* param)
 {
@@ -732,9 +999,17 @@ void ChangedAccessOfInheritedProperty::setProtectedProperty(int value)
 {
 }
 
+ReturnsEmpty::ReturnsEmpty()
+{
+}
+
 Empty ReturnsEmpty::getEmpty()
 {
     return Empty();
+}
+
+RefTypeClassPassTry::RefTypeClassPassTry()
+{
 }
 
 void funcTryRefTypePtrOut(CS_OUT RefTypeClassPassTry* classTry)
@@ -779,6 +1054,10 @@ BaseClassVirtual BaseClassVirtual::getBase()
 int DerivedClassVirtual::retInt(const Foo2& foo)
 {
     return 2;
+}
+
+DerivedClassAbstractVirtual::~DerivedClassAbstractVirtual()
+{
 }
 
 DerivedClassOverrideAbstractVirtual::DerivedClassOverrideAbstractVirtual()
@@ -829,8 +1108,25 @@ NonTrivialDtor::~NonTrivialDtor()
     dtorCalled = true;
 }
 
+bool NonTrivialDtor::getDtorCalled()
+{
+    return true;
+}
+
+void NonTrivialDtor::setDtorCalled(bool value)
+{
+    dtorCalled = true;
+}
+
+bool NonTrivialDtor::dtorCalled = false;
+
 DerivedFromTemplateInstantiationWithVirtual::DerivedFromTemplateInstantiationWithVirtual()
 {
+}
+
+int func_union(union_t u)
+{
+    return u.c;
 }
 
 HasProtectedEnum::HasProtectedEnum()
@@ -847,7 +1143,10 @@ void FuncWithTypeAlias(custom_int_t i)
 
 void FuncWithTemplateTypeAlias(TypeAliasTemplate<int> i)
 {
+}
 
+HasAbstractOperator::~HasAbstractOperator()
+{
 }
 
 HasOverloadsWithDifferentPointerKindsToSameType::HasOverloadsWithDifferentPointerKindsToSameType()
@@ -902,10 +1201,26 @@ void sMallFollowedByCapital()
 {
 }
 
+TestNotStaticClass::TestNotStaticClass()
+{
+}
+
+TestNotStaticClass TestNotStaticClass::StaticFunction()
+{
+    return TestNotStaticClass();
+}
+
+int TestStaticClass::Add(int a, int b) { return a + b; }
+int TestStaticClass::GetOneTwoThree() { return 123; }
+int TestStaticClass::_Mult(int a, int b) { return a * b; }
+int TestStaticClass::GetFourFiveSix() { return 456; }
+
 TestStaticClass& TestStaticClass::operator=(const TestStaticClass& oth)
 {
     return *this;
 }
+
+int TestStaticClassDerived::Foo() { return 0; }
 
 HasCopyAndMoveConstructor::HasCopyAndMoveConstructor(int value)
 {
@@ -967,6 +1282,10 @@ HasVirtualFunctionWithBoolParams::~HasVirtualFunctionWithBoolParams()
 bool HasVirtualFunctionWithBoolParams::virtualFunctionWithBoolParamAndReturnsBool(bool testBool)
 {
     return testBool;
+}
+
+HasProtectedCtorWithProtectedParam::HasProtectedCtorWithProtectedParam(ProtectedEnum protectedParam)
+{
 }
 
 SecondaryBaseWithIgnoredVirtualMethod::SecondaryBaseWithIgnoredVirtualMethod()
@@ -1048,3 +1367,96 @@ void overloadPointer(void* p, int i)
 void overloadPointer(const void* p, int i)
 {
 }
+
+const char* takeReturnUTF8(const char* utf8)
+{
+    UTF8 = utf8;
+    return UTF8.data();
+}
+
+LPCSTR TakeTypedefedMappedType(LPCSTR string)
+{
+    UTF8 = string;
+    return UTF8.data();
+}
+
+StructWithCopyCtor::StructWithCopyCtor() {}
+StructWithCopyCtor::StructWithCopyCtor(const StructWithCopyCtor& other) : mBits(other.mBits) {}
+
+uint16_t TestStructWithCopyCtorByValue(StructWithCopyCtor s)
+{
+    return s.mBits;
+}
+
+BaseCovariant::~BaseCovariant()
+{
+}
+
+DerivedCovariant::~DerivedCovariant()
+{
+}
+
+NonPrimitiveType::NonPrimitiveType()
+{
+}
+
+int NonPrimitiveType::GetFoo()
+{
+    return foo;
+}
+
+TestFixedNonPrimitiveArrays::TestFixedNonPrimitiveArrays() 
+{
+}
+
+TestGetterSetterToProperties::TestGetterSetterToProperties()
+{
+}
+
+int TestGetterSetterToProperties::getWidth() { return 640; }
+int TestGetterSetterToProperties::getHeight() { return 480; }
+
+PointerToTypedefPointerTest::PointerToTypedefPointerTest()
+{
+}
+
+void DLL_API PointerToTypedefPointerTestMethod(LPPointerToTypedefPointerTest* lp, int valToSet)
+{
+    (*(*lp)).val = valToSet;
+}
+
+void DLL_API PointerToPrimitiveTypedefPointerTestMethod(LPINT lp, int valToSet)
+{
+    *lp = valToSet;
+}
+
+TestArraysPointers::TestArraysPointers(MyEnum* values, int count)
+{
+    if (values && count) Value = values[0];
+}
+
+TestCopyConstructorRef::TestCopyConstructorRef()
+{
+}
+
+TestCopyConstructorRef::TestCopyConstructorRef(const TestCopyConstructorRef& other)
+{
+    A = other.A;
+    B = other.B;
+}
+
+
+SomeStruct::SomeStruct() : p(1) {}
+
+ClassWithOverloadedOperators::ClassWithOverloadedOperators() {
+
+}
+
+ClassWithOverloadedOperators::ClassWithOverloadedOperators::operator char() { return 1; }
+ClassWithOverloadedOperators::operator int() { return 2; }
+ClassWithOverloadedOperators::operator short() { return 3; }
+bool ClassWithOverloadedOperators::operator<(const ClassWithOverloadedOperators& other) const {
+    return true;
+}
+
+int TestIndexedPropertiesInValueType::operator[](int i) { return i; }

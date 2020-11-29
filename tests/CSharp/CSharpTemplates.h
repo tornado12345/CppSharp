@@ -6,10 +6,15 @@
 #include <string>
 #include <map>
 
+class DLL_API QString
+{
+};
+
 class DLL_API T1
 {
 public:
     T1();
+    T1(const T1& other);
     T1(int f);
     ~T1();
     int getField() const;
@@ -19,6 +24,8 @@ private:
 
 class DLL_API T2
 {
+public:
+    T2();
 };
 
 class DLL_API Ignored
@@ -26,28 +33,27 @@ class DLL_API Ignored
 };
 
 template <typename T>
-class DLL_API IndependentFields : public T1
+class IndependentFields : public T1
 {
+    typedef T Type;
 public:
     IndependentFields();
     IndependentFields(const IndependentFields<T>& other);
     IndependentFields(const T& t);
     IndependentFields(T1* t1);
     IndependentFields(T2* t2);
-    IndependentFields(int i);
+    IndependentFields(float f);
     ~IndependentFields();
     explicit IndependentFields(const std::map<T, T> &other);
-    int getIndependent();
-    const T* returnTakeDependentPointer(const T* p);
+    float getIndependent();
     T getDependent(const T& t);
-    const T* propertyReturnDependentPointer();
+    Type property();
     static T staticDependent(const T& t);
-    void hasDefaultDependentParam(T* ptr, const T& refT = T());
     template <typename AdditionalDependentType>
     void usesAdditionalDependentType(AdditionalDependentType additionalDependentType);
     static const int independentConst;
 private:
-    int independent;
+    float independent;
 };
 
 template <typename T>
@@ -80,9 +86,9 @@ IndependentFields<T>::IndependentFields(T2* t2) : independent(1)
 }
 
 template <typename T>
-IndependentFields<T>::IndependentFields(int i)
+IndependentFields<T>::IndependentFields(float f)
 {
-    independent = i;
+    independent = f;
 }
 
 template <typename T>
@@ -96,21 +102,15 @@ IndependentFields<T>::~IndependentFields()
 }
 
 template <typename T>
-const T* IndependentFields<T>::returnTakeDependentPointer(const T* p)
-{
-    return p;
-}
-
-template <typename T>
 T IndependentFields<T>::getDependent(const T& t)
 {
     return t;
 }
 
 template <typename T>
-const T* IndependentFields<T>::propertyReturnDependentPointer()
+T IndependentFields<T>::property()
 {
-    return 0;
+    return T();
 }
 
 template <typename T>
@@ -120,12 +120,7 @@ T IndependentFields<T>::staticDependent(const T& t)
 }
 
 template <typename T>
-void IndependentFields<T>::hasDefaultDependentParam(T* ptr, const T& refT)
-{
-}
-
-template <typename T>
-int IndependentFields<T>::getIndependent()
+float IndependentFields<T>::getIndependent()
 {
     return independent;
 }
@@ -143,12 +138,12 @@ private:
 };
 
 template <typename T>
-class DLL_API Base
+class Base
 {
 };
 
 template <typename T>
-class DLL_API DependentValueFields : public Base<T>
+class DependentValueFields : public Base<T>
 {
 public:
     class Nested;
@@ -165,6 +160,9 @@ public:
     T getDependentValue();
     void setDependentValue(const T& value);
     IndependentFields<Nested> returnNestedInTemplate();
+    const T* returnTakeDependentPointer(const T* p);
+    const T* propertyReturnDependentPointer();
+    void hasDefaultDependentParam(T* ptr, const T& refT = T());
     typedef void (*DependentFunctionPointer)(T);
     DependentFunctionPointer dependentFunctionPointerField;
 private:
@@ -208,6 +206,23 @@ IndependentFields<typename DependentValueFields<T>::Nested> DependentValueFields
 }
 
 template <typename T>
+const T* DependentValueFields<T>::returnTakeDependentPointer(const T* p)
+{
+    return p;
+}
+
+template <typename T>
+const T* DependentValueFields<T>::propertyReturnDependentPointer()
+{
+    return 0;
+}
+
+template <typename T>
+void DependentValueFields<T>::hasDefaultDependentParam(T* ptr, const T& refT)
+{
+}
+
+template <typename T>
 DependentValueFields<T>& DependentValueFields<T>::returnInjectedClass()
 {
     return *this;
@@ -233,10 +248,10 @@ public:
 };
 
 template <typename T>
-class DLL_API DependentPointerFields
+class DependentPointerFields
 {
 public:
-    DependentPointerFields();
+    DependentPointerFields(T t = 0);
     ~DependentPointerFields();
     T property();
     T takeField(T t);
@@ -244,7 +259,7 @@ public:
 };
 
 template <typename T>
-DependentPointerFields<T>::DependentPointerFields()
+DependentPointerFields<T>::DependentPointerFields(T t)
 {
 }
 
@@ -268,13 +283,42 @@ T DependentPointerFields<T>::takeField(T t)
 template <typename K, typename V>
 class TwoTemplateArgs
 {
+public:
+    class iterator
+    {
+    public:
+        iterator();
+        ~iterator();
+    };
+    void takeDependentPtrToFirstTemplateArg(iterator i, const K& k);
+    void takeDependentPtrToSecondTemplateArg(const V& v);
 private:
     K key;
     V value;
 };
 
+template <typename K, typename V>
+TwoTemplateArgs<K, V>::iterator::iterator()
+{
+}
+
+template <typename K, typename V>
+TwoTemplateArgs<K, V>::iterator::~iterator()
+{
+}
+
+template <typename K, typename V>
+void TwoTemplateArgs<K, V>::takeDependentPtrToFirstTemplateArg(iterator i, const K& k)
+{
+}
+
+template <typename K, typename V>
+void TwoTemplateArgs<K, V>::takeDependentPtrToSecondTemplateArg(const V& v)
+{
+}
+
 template <typename T, typename D = IndependentFields<T>>
-class DLL_API HasDefaultTemplateArgument
+class HasDefaultTemplateArgument
 {
 public:
     HasDefaultTemplateArgument();
@@ -379,7 +423,7 @@ DerivesFromTemplateWithExplicitSpecialization<T, D>::~DerivesFromTemplateWithExp
 {
 }
 
-class DerivesFromExplicitSpecialization : public DerivesFromTemplateWithExplicitSpecialization<bool, bool>
+class DLL_API DerivesFromExplicitSpecialization : public DerivesFromTemplateWithExplicitSpecialization<bool, bool>
 {
 public:
     DerivesFromExplicitSpecialization();
@@ -534,7 +578,11 @@ public:
                                            DependentValueFields<float*> p3);
     void completeSpecializationInParameter(TwoTemplateArgs<int*, int*> p1,
                                            TwoTemplateArgs<int*, int> p2,
-                                           TwoTemplateArgs<int*, float> p3);
+                                           TwoTemplateArgs<int*, float> p3,
+                                           TwoTemplateArgs<const char*, int> p4,
+                                           TwoTemplateArgs<QString, int> p5,
+                                           TwoTemplateArgs<const char*, int>::iterator p6,
+                                           TwoTemplateArgs<QString, int>::iterator p7);
     VirtualTemplate<void> returnSpecializedWithVoid();
 private:
     IndependentFields<int> independentFields;
@@ -603,7 +651,7 @@ public:
 };
 
 template<typename T>
-class DLL_API TemplateDerivedFromRegularDynamic : public RegularDynamic
+class TemplateDerivedFromRegularDynamic : public RegularDynamic
 {
 public:
     TemplateDerivedFromRegularDynamic();
@@ -630,6 +678,7 @@ public:
 template <typename T>
 DependentValueFields<OnlySpecialisedInTypeArg<T>> OnlySpecialisedInTypeArg<T>::returnSelfSpecialization()
 {
+    return DependentValueFields<OnlySpecialisedInTypeArg<T>>();
 }
 
 enum class UsedInTemplatedIndexer
@@ -639,7 +688,7 @@ enum class UsedInTemplatedIndexer
 };
 
 template <typename T>
-class DLL_API QFlags
+class QFlags
 {
     typedef int Int;
     typedef int (*Zero);
@@ -671,9 +720,14 @@ template <typename T>
 class HasCtorWithMappedToEnum
 {
 public:
-    HasCtorWithMappedToEnum(QFlags<T> t);
     HasCtorWithMappedToEnum(T t);
+    HasCtorWithMappedToEnum(QFlags<T> t);
 };
+
+template <typename T>
+HasCtorWithMappedToEnum<T>::HasCtorWithMappedToEnum(T t)
+{
+}
 
 template <typename T>
 HasCtorWithMappedToEnum<T>::HasCtorWithMappedToEnum(QFlags<T> t)
@@ -681,9 +735,19 @@ HasCtorWithMappedToEnum<T>::HasCtorWithMappedToEnum(QFlags<T> t)
 }
 
 template <typename T>
-HasCtorWithMappedToEnum<T>::HasCtorWithMappedToEnum(T t)
+class AbstractTemplate
 {
-}
+public:
+    virtual int property() = 0;
+    virtual int callFunction() = 0;
+};
+
+class DLL_API ImplementAbstractTemplate : public AbstractTemplate<int>
+{
+public:
+    int property() override;
+    int callFunction() override;
+};
 
 enum class TestFlag
 {
@@ -702,7 +766,8 @@ void forceUseSpecializations(IndependentFields<int> _1, IndependentFields<bool> 
                              TemplateDerivedFromRegularDynamic<RegularDynamic> _14,
                              IndependentFields<OnlySpecialisedInTypeArg<double>> _15,
                              DependentPointerFields<float> _16, IndependentFields<const T1&> _17,
-                             TemplateWithIndexer<T2*> _18, std::string s);
+                             TemplateWithIndexer<T2*> _18, IndependentFields<int(*)(int)> _19,
+                             TemplateWithIndexer<const char*> _20, std::string s);
 
 void hasIgnoredParam(DependentValueFields<IndependentFields<Ignored>> ii);
 
@@ -737,8 +802,14 @@ template class DLL_API TemplateWithIndexer<UsedInTemplatedIndexer>;
 template class DLL_API TemplateWithIndexer<T1>;
 template class DLL_API TemplateWithIndexer<T2*>;
 template class DLL_API TemplateWithIndexer<float>;
+template class DLL_API TemplateWithIndexer<const char*>;
 template class DLL_API TemplateDerivedFromRegularDynamic<RegularDynamic>;
 template class DLL_API HasCtorWithMappedToEnum<TestFlag>;
+template class DLL_API TwoTemplateArgs<int*, int*>;
+template class DLL_API TwoTemplateArgs<int*, int>;
+template class DLL_API TwoTemplateArgs<int*, float>;
+template class DLL_API TwoTemplateArgs<const char*, int>;
+template class DLL_API TwoTemplateArgs<QString, int>;
 
 class TestForwardedClassInAnotherUnit;
 

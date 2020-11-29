@@ -57,6 +57,29 @@ static std::vector<T> split(const T & str, const T & delimiters) {
 
 namespace CppSharp { namespace CppParser { namespace AST {
 
+static void deleteExpression(ExpressionObsolete* expression)
+{
+    if (expression)
+    {
+        // HACK: see https://github.com/mono/CppSharp/issues/598
+        switch (expression->_class)
+        {
+        case StatementClassObsolete::BinaryOperator:
+            delete static_cast<BinaryOperatorObsolete*>(expression);
+            break;
+        case StatementClassObsolete::CallExprClass:
+            delete static_cast<CallExprObsolete*>(expression);
+            break;
+        case StatementClassObsolete::CXXConstructExprClass:
+            delete static_cast<CXXConstructExprObsolete*>(expression);
+            break;
+        default:
+            delete expression;
+            break;
+        }
+    }
+}
+
 Type::Type(TypeKind kind) : kind(kind) {}
 Type::Type(const Type& rhs) : kind(rhs.kind), isDependent(rhs.isDependent) {}
 
@@ -144,7 +167,10 @@ NonTypeTemplateParameter::NonTypeTemplateParameter(const NonTypeTemplateParamete
 {
 }
 
-NonTypeTemplateParameter::~NonTypeTemplateParameter() {}
+NonTypeTemplateParameter::~NonTypeTemplateParameter()
+{
+    deleteExpression(defaultArgument);
+}
 
 TemplateArgument::TemplateArgument() : declaration(0), integral(0) {}
 
@@ -187,10 +213,11 @@ DependentNameType::DependentNameType() : Type(TypeKind::DependentName) {}
 
 DependentNameType::~DependentNameType() {}
 
-
 PackExpansionType::PackExpansionType() : Type(TypeKind::PackExpansion) {}
 
 UnaryTransformType::UnaryTransformType() : Type(TypeKind::UnaryTransform) {}
+
+UnresolvedUsingType::UnresolvedUsingType() : Type(TypeKind::UnresolvedUsing) {}
 
 VectorType::VectorType() : Type(TypeKind::Vector), numElements(0) {}
 
@@ -228,8 +255,8 @@ LayoutBase::LayoutBase(const LayoutBase& other) : offset(other.offset), _class(o
 
 LayoutBase::~LayoutBase() {}
 
-ClassLayout::ClassLayout() : ABI(CppAbi::Itanium), hasOwnVFPtr(false),
-    VBPtrOffset(0), alignment(0), size(0), dataSize(0) {}
+ClassLayout::ClassLayout() : ABI(CppAbi::Itanium), argABI(RecordArgABI::Default),
+    hasOwnVFPtr(false), VBPtrOffset(0), alignment(0), size(0), dataSize(0) {}
 
 DEF_VECTOR(ClassLayout, VFTableInfo, VFTables)
 
@@ -249,10 +276,12 @@ Declaration::Declaration(DeclarationKind kind)
     , isDependent(false)
     , isImplicit(false)
     , isInvalid(false)
+    , isDeprecated(false)
     , completeDeclaration(0)
     , definitionOrder(0)
     , originalPtr(0)
-    , maxFieldAlignment(0)
+    , alignAs(0)
+    , maxFieldAlignment(0)    
 {
 }
 
@@ -270,6 +299,7 @@ Declaration::Declaration(const Declaration& rhs)
     , isDependent(rhs.isDependent)
     , isImplicit(rhs.isImplicit)
     , isInvalid(rhs.isInvalid)
+    , isDeprecated(rhs.isDeprecated)
     , completeDeclaration(rhs.completeDeclaration)
     , definitionOrder(rhs.definitionOrder)
     , PreprocessedEntities(rhs.PreprocessedEntities)
@@ -575,8 +605,8 @@ BinaryOperatorObsolete::BinaryOperatorObsolete(const std::string& str, Expressio
 
 BinaryOperatorObsolete::~BinaryOperatorObsolete()
 {
-    delete LHS;
-    delete RHS;
+    deleteExpression(LHS);
+    deleteExpression(RHS);
 }
 
 
@@ -586,7 +616,7 @@ CallExprObsolete::CallExprObsolete(const std::string& str, Declaration* decl)
 CallExprObsolete::~CallExprObsolete()
 {
     for (auto& arg : Arguments)
-        delete arg;
+        deleteExpression(arg);
 }
 
 DEF_VECTOR(CallExprObsolete, ExpressionObsolete*, Arguments)
@@ -597,7 +627,7 @@ CXXConstructExprObsolete::CXXConstructExprObsolete(const std::string& str, Decla
 CXXConstructExprObsolete::~CXXConstructExprObsolete()
 {
     for (auto& arg : Arguments)
-        delete arg;
+        deleteExpression(arg);
 }
 
 DEF_VECTOR(CXXConstructExprObsolete, ExpressionObsolete*, Arguments)
@@ -613,25 +643,7 @@ Parameter::Parameter()
 
 Parameter::~Parameter()
 {
-    if (defaultArgument)
-    {
-        // HACK: see https://github.com/mono/CppSharp/issues/598
-        switch (defaultArgument->_class)
-        {
-        case StatementClassObsolete::BinaryOperator:
-            delete static_cast<BinaryOperatorObsolete*>(defaultArgument);
-            break;
-        case StatementClassObsolete::CallExprClass:
-            delete static_cast<CallExprObsolete*>(defaultArgument);
-            break;
-        case StatementClassObsolete::CXXConstructExprClass:
-            delete static_cast<CXXConstructExprObsolete*>(defaultArgument);
-            break;
-        default:
-            delete defaultArgument;
-            break;
-        }
-    }
+    deleteExpression(defaultArgument);
 }
 
 Function::Function() 
@@ -698,7 +710,8 @@ Enumeration::Item* Enumeration::FindItemByName(const std::string& Name)
     return nullptr;
 }
 
-Variable::Variable() : Declaration(DeclarationKind::Variable) {}
+Variable::Variable() : Declaration(DeclarationKind::Variable),
+    isConstExpr(false), initializer(0) {}
 
 Variable::~Variable() {}
 
@@ -852,6 +865,10 @@ VarTemplatePartialSpecialization::~VarTemplatePartialSpecialization()
 {
 }
 
+UnresolvedUsingTypename::UnresolvedUsingTypename() : Declaration(DeclarationKind::UnresolvedUsingTypename) {}
+
+UnresolvedUsingTypename::~UnresolvedUsingTypename() {}
+
 Namespace::Namespace() 
     : DeclarationContext(DeclarationKind::Namespace)
     , isInline(false) 
@@ -879,13 +896,9 @@ TranslationUnit::~TranslationUnit() {}
 DEF_VECTOR(TranslationUnit, MacroDefinition*, Macros)
 
 NativeLibrary::NativeLibrary()
-    : archType(AST::ArchType::UnknownArch)
-{
-}
+    : archType(AST::ArchType::UnknownArch) {}
 
-NativeLibrary::~NativeLibrary()
-{
-}
+NativeLibrary::~NativeLibrary() {}
 
 // NativeLibrary
 DEF_VECTOR_STRING(NativeLibrary, Symbols)

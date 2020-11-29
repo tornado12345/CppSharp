@@ -45,7 +45,8 @@ enum class DeclarationKind
     NonTypeTemplateParm,
     VarTemplate,
     VarTemplateSpecialization,
-    VarTemplatePartialSpecialization
+    VarTemplatePartialSpecialization,
+    UnresolvedUsingTypename,
 };
 
 #define DECLARE_DECL_KIND(klass, kind) \
@@ -62,6 +63,7 @@ class DeclarationContext;
 class RawComment;
 class PreprocessedEntity;
 
+class ExpressionObsolete;
 class CS_API Declaration
 {
 public:
@@ -70,6 +72,7 @@ public:
     ~Declaration();
 
     DeclarationKind kind;
+    int alignAs;
     int maxFieldAlignment;
     AccessSpecifier access;
     DeclarationContext* _namespace;
@@ -83,6 +86,7 @@ public:
     bool isDependent;
     bool isImplicit;
     bool isInvalid;
+    bool isDeprecated;
     Declaration* completeDeclaration;
     unsigned definitionOrder;
     VECTOR(PreprocessedEntity*, PreprocessedEntities)
@@ -418,8 +422,10 @@ class CS_API Variable : public Declaration
 public:
     DECLARE_DECL_KIND(Variable, Variable)
     ~Variable();
+    bool isConstExpr;
     std::string mangled;
     QualifiedType qualifiedType;
+    ExpressionObsolete* initializer;
 };
 
 class PreprocessedEntity;
@@ -524,10 +530,26 @@ public:
     Class* _class;
 };
 
+enum class RecordArgABI
+{
+    /// Pass it using the normal C aggregate rules for the ABI,
+    /// potentially introducing extra copies and passing some
+    /// or all of it in registers.
+    Default = 0,
+    /// Pass it on the stack using its defined layout.
+    /// The argument must be evaluated directly into the correct
+    /// stack position in the arguments area, and the call machinery
+    /// must not move it or introduce extra copies.
+    DirectInMemory,
+    /// Pass it as a pointer to temporary memory.
+    Indirect
+};
+
 struct CS_API ClassLayout
 {
     ClassLayout();
     CppAbi ABI;
+    RecordArgABI argABI;
     VECTOR(VFTableInfo, VFTables)
     VTableLayout layout;
     bool hasOwnVFPtr;
@@ -645,7 +667,7 @@ public:
     ClassTemplate();
     ~ClassTemplate();
     VECTOR(ClassTemplateSpecialization*, Specializations)
-        ClassTemplateSpecialization* FindSpecialization(const std::string& usr);
+    ClassTemplateSpecialization* FindSpecialization(const std::string& usr);
     ClassTemplatePartialSpecialization* FindPartialSpecialization(const std::string& usr);
 };
 
@@ -723,6 +745,13 @@ class CS_API VarTemplatePartialSpecialization : public VarTemplateSpecialization
 public:
     VarTemplatePartialSpecialization();
     ~VarTemplatePartialSpecialization();
+};
+
+class CS_API UnresolvedUsingTypename : public Declaration
+{
+public:
+    UnresolvedUsingTypename();
+    ~UnresolvedUsingTypename();
 };
 
 class CS_API Namespace : public DeclarationContext

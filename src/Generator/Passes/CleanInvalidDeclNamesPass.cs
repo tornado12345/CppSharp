@@ -2,127 +2,105 @@
 using System.Linq;
 using System.Text;
 using CppSharp.AST;
-using CppSharp.Generators.CLI;
-using CppSharp.Generators.CSharp;
+using CppSharp.AST.Extensions;
+using CppSharp.Generators;
 
 namespace CppSharp.Passes
 {
     public class CleanInvalidDeclNamesPass : TranslationUnitPass
     {
-        private int uniqueName;
+        public CleanInvalidDeclNamesPass() => VisitOptions.ClearFlags(
+            VisitFlags.ClassBases | VisitFlags.EventParameters |
+            VisitFlags.FunctionReturnType | VisitFlags.TemplateArguments);
 
-        string CheckName(string name)
+        public override bool VisitClassDecl(Class @class)
         {
-            // Generate a new name if the decl still does not have a name
-            if (string.IsNullOrWhiteSpace(name))
-                return string.Format("_{0}", uniqueName++);
-
-            // Clean up the item name if the first digit is not a valid name.
-            if (char.IsNumber(name[0]))
-                return '_' + name;
-
-            // TODO: Fix this to not need per-generator code.
-            var units = new List<TranslationUnit> { new TranslationUnit() };
-            if (Options.IsCLIGenerator)
-                return new CLIHeaders(Context, units).SafeIdentifier(name);
-
-            return new CSharpSources(Context, units).SafeIdentifier(name);
-        }
-
-        public override bool VisitDeclaration(Declaration decl)
-        {
-            if (!base.VisitDeclaration(decl))
+            if (!base.VisitClassDecl(@class))
                 return false;
 
-            // Do not clean up namespace names since it can mess up with the
-            // names of anonymous or the global namespace.
-            if (decl is Namespace)
-                return true;
-
-            // types with empty names are assumed to be private
-            if (decl is Class && string.IsNullOrWhiteSpace(decl.Name))
+            if (Options.GeneratorKind == GeneratorKind.CLI &&
+                string.IsNullOrEmpty(@class.OriginalName))
             {
-                decl.Name = decl.Namespace.Name == "_" ? "__" : "_";
-                decl.ExplicitlyIgnore();
+                @class.ExplicitlyIgnore();
                 return true;
             }
 
-            var function = decl as Function;
-            var method = function as Method;
-            if ((function == null || !function.IsOperator) && !(decl is Enumeration) &&
-                (method == null || method.Kind == CXXMethodKind.Normal))
-                decl.Name = CheckName(decl.Name);
+            if (@class.Layout != null)
+            {
+                var fields = @class.Layout.Fields.Where(
+                    f => string.IsNullOrEmpty(f.Name)).ToList();
+
+                for (int i = 0; i < fields.Count; i++)
+                    fields[i].Name = $"_{i}";
+            }
 
             return true;
         }
 
-        public override bool VisitParameterDecl(Parameter parameter)
+        public override bool VisitFieldDecl(Field field)
         {
-            return VisitDeclaration(parameter);
-        }
+            if (!base.VisitDeclaration(field))
+                return false;
 
-        public override bool VisitClassDecl(Class @class)
-        {
-            var currentUniqueName = uniqueName;
-            uniqueName = 0;
-            base.VisitClassDecl(@class);
-            uniqueName = currentUniqueName;
+            field.Type.Visit(this, field.QualifiedType.Qualifiers);
 
-            if (!@class.IsDependent)
-                foreach (var field in @class.Layout.Fields.Where(f => string.IsNullOrEmpty(f.Name)))
-                    field.Name = @class.Name == "_" ? "__" : "_";
-
-            if (@class is ClassTemplateSpecialization &&
-                !(from c in @class.Namespace.Classes
-                  where c.Name == @class.Name && !(@class is ClassTemplateSpecialization) &&
-                      c != ((ClassTemplateSpecialization) @class).TemplatedDecl.TemplatedClass
-                  select c).Any())
-                return true;
-
-            if (@class.Namespace.Classes.Any(d => d != @class && d.Name == @class.Name))
+            Class @class;
+            if (field.Type.TryGetClass(out @class) && string.IsNullOrEmpty(@class.OriginalName))
             {
-                // we need the new name in each iteration so no point in StringBuilder
-                var name = @class.Name;
-                do
-                {
-                    name += '_';
-                } while (@class.Namespace.Name == name ||
-                    @class.Classes.Any(d => d != @class && d.Name == name));
-                @class.Name = name;
+                @class.Name = field.Name;
+
+                foreach (var item in @class.Fields.Where(f => f.Name == @class.Name))
+                    Rename(item);
+
+                Rename(field);
             }
 
+            return true;
+        }
+
+        public override bool VisitEnumDecl(Enumeration @enum)
+        {
+            if (!base.VisitEnumDecl(@enum))
+                return false;
+
+            Check(@enum.Items);
+
+            foreach (Enumeration.Item item in @enum.Items.Where(i => char.IsNumber(i.Name[0])))
+                item.Name = $"_{item.Name}";
+            CheckEnumName(@enum);
             return true;
         }
 
         public override bool VisitFunctionDecl(Function function)
         {
-            var currentUniqueName = uniqueName;
-            uniqueName = 0;
-            var ret = base.VisitFunctionDecl(function);
-            uniqueName = currentUniqueName;
+            if (!base.VisitFunctionDecl(function))
+                return false;
 
-            return ret;
+            Check(function.Parameters);
+            return true;
         }
 
-        public override bool VisitEvent(Event @event)
+        public override bool VisitDeclarationContext(DeclarationContext context)
         {
-            var currentUniqueName = uniqueName;
-            uniqueName = 0;
-            var ret = base.VisitEvent(@event);
-            uniqueName = currentUniqueName;
+            if (!base.VisitDeclarationContext(context))
+                return false;
 
-            return ret;
+            Check(context.Declarations);
+
+            var @class = context as Class;
+            if (@class != null)
+                Check(@class.Fields);
+
+            return true;
         }
 
-        public override bool VisitFunctionType(FunctionType type,
-            TypeQualifiers quals)
+        public override bool VisitFunctionType(FunctionType function, TypeQualifiers quals)
         {
-            var currentUniqueName = this.uniqueName;
-            this.uniqueName = 0;
-            var ret = base.VisitFunctionType(type, quals);
-            this.uniqueName = currentUniqueName;
+            if (!base.VisitFunctionType(function, quals))
+                return false;
 
-            return ret;
+            Check(function.Parameters);
+            return true;
         }
 
         private void CheckEnumName(Enumeration @enum)
@@ -138,10 +116,7 @@ namespace CppSharp.Passes
 
             // Try a simple heuristic to make sure we end up with a valid name.
             if (prefix.Length < 3)
-            {
-                @enum.Name = CheckName(@enum.Name);
                 return;
-            }
 
             var prefixBuilder = new StringBuilder(prefix);
             prefixBuilder.TrimUnderscores();
@@ -151,40 +126,30 @@ namespace CppSharp.Passes
             @enum.Name = prefixBuilder.ToString();
         }
 
-        public override bool VisitEnumDecl(Enumeration @enum)
+        private static void Rename(Field field)
         {
-            if (!base.VisitEnumDecl(@enum))
-                return false;
-
-            CheckEnumName(@enum);
-            return true;
-        }
-
-        public override bool VisitEnumItemDecl(Enumeration.Item item)
-        {
-            if (!base.VisitEnumItemDecl(item))
-                return false;
-
-            item.Name = CheckName(item.Name);
-            return true;
-        }
-
-        public override bool VisitFieldDecl(Field field)
-        {
-            if (!base.VisitFieldDecl(field))
-                return false;
-
-            if (field.Class.Fields.Count(c => c.Name.Equals(field.Name)) > 1)
+            var nameBuilder = new StringBuilder(field.Name);
+            for (int i = 0; i < nameBuilder.Length; i++)
             {
-                StringBuilder str = new StringBuilder();
-                str.Append(field.Name);
-                do
-                {
-                    str.Append('_');
-                } while (field.Class.Fields.Any(c => c.Name.Equals(str.ToString())));
-                field.Name = str.ToString();
+                if (!char.IsUpper(nameBuilder[i]))
+                    break;
+                nameBuilder[i] = char.ToLowerInvariant(nameBuilder[i]);
             }
-            return true;
+            field.Name = nameBuilder.ToString();
+        }
+
+        private static void Check(IEnumerable<Declaration> decls)
+        {
+            var anonymousDecls = decls.Where(p => string.IsNullOrEmpty(p.Name)).ToList();
+            for (int i = 0; i < anonymousDecls.Count; i++)
+            {
+                var anonymousDecl = anonymousDecls[i];
+
+                if (anonymousDecl.Namespace != null && anonymousDecl.Namespace.Name == anonymousDecl.Name)
+                    anonymousDecl.Name = $"__{i}";
+                else
+                    anonymousDecl.Name = $"_{i}";
+            }
         }
     }
 }

@@ -13,313 +13,6 @@ namespace CppSharp.Passes
 {
     public class GetterSetterToPropertyPass : TranslationUnitPass
     {
-        private class PropertyGenerator
-        {
-            private readonly List<Method> getters = new List<Method>();
-            private readonly List<Method> setters = new List<Method>();
-            private readonly List<Method> setMethods = new List<Method>();
-            private readonly List<Method> nonSetters = new List<Method>();
-            private bool useHeuristics = true;
-
-            public PropertyGenerator(Class @class, bool useHeuristics)
-            {
-                this.useHeuristics = useHeuristics;
-                foreach (var method in @class.Methods.Where(
-                    m => !m.IsConstructor && !m.IsDestructor && !m.IsOperator && m.IsGenerated &&
-                         !m.ExcludeFromPasses.Contains(typeof(GetterSetterToPropertyPass))))
-                    DistributeMethod(method);
-            }
-
-            public void GenerateProperties()
-            {
-                GenerateProperties(setters, false);
-                GenerateProperties(setMethods, true);
-
-                foreach (Method getter in
-                    from getter in getters
-                    where getter.IsGenerated &&
-                          getter.SynthKind != FunctionSynthKind.ComplementOperator &&
-                          ((Class) getter.Namespace).Methods.All(
-                              m => m == getter || !m.IsGenerated || m.Name != getter.Name ||
-                                   m.Parameters.Count(p => p.Kind == ParameterKind.Regular) == 0)
-                    select getter)
-                {
-                    // Make it a read-only property
-                    GenerateProperty(getter.Namespace, getter);
-                }
-            }
-
-            private void GenerateProperties(IEnumerable<Method> settersToUse, bool readOnly)
-            {
-                foreach (var setter in settersToUse)
-                {
-                    var type = (Class) setter.Namespace;
-                    var firstWord = GetFirstWord(setter.Name);
-                    string property;
-                    if ((firstWord == "set" || firstWord == "set_") &&
-                        firstWord.Length < setter.Name.Length)
-                        property = setter.Name.Substring(firstWord.Length);
-                    else
-                        property = setter.Name;
-                    var nameBuilder = new StringBuilder(property);
-                    if (char.IsLower(setter.Name[0]))
-                        nameBuilder[0] = char.ToLowerInvariant(nameBuilder[0]);
-                    string afterSet = nameBuilder.ToString();
-                    var s = setter;
-                    foreach (var getter in nonSetters.Where(m => m.Namespace == type &&
-                                                                 m.ExplicitInterfaceImpl == s.ExplicitInterfaceImpl))
-                    {
-                        var name = GetReadWritePropertyName(getter, afterSet);
-                        if (name == afterSet &&
-                            GetUnderlyingType(getter.OriginalReturnType).Equals(
-                                GetUnderlyingType(setter.Parameters[0].QualifiedType)))
-                        {
-                            Method g = getter;
-                            foreach (var method in type.Methods.Where(m => m != g && m.Name == name))
-                            {
-                                var oldName = method.Name;
-                                method.Name = string.Format("get{0}{1}",
-                                    char.ToUpperInvariant(method.Name[0]), method.Name.Substring(1));
-                                Diagnostics.Debug("Method {0}::{1} renamed to {2}", method.Namespace.Name, oldName, method.Name);
-                            }
-                            foreach (var @event in type.Events.Where(e => e.Name == name))
-                            {
-                                var oldName = @event.Name;
-                                @event.Name = string.Format("on{0}{1}",
-                                    char.ToUpperInvariant(@event.Name[0]), @event.Name.Substring(1));
-                                Diagnostics.Debug("Event {0}::{1} renamed to {2}", @event.Namespace.Name, oldName, @event.Name);
-                            }
-                            GenerateProperty(name, getter.Namespace, getter, readOnly ? null : setter);
-                            goto next;
-                        }
-                    }
-                    Property baseProperty = type.GetBaseProperty(new Property { Name = afterSet }, getTopmost: true);
-                    if (!type.IsInterface && baseProperty != null && baseProperty.IsVirtual && setter.IsVirtual)
-                    {
-                        bool isReadOnly = baseProperty.SetMethod == null;
-                        var name = GetReadWritePropertyName(baseProperty.GetMethod, afterSet);
-                        GenerateProperty(name, setter.Namespace, baseProperty.GetMethod,
-                            readOnly || isReadOnly ? null : setter);
-                    }
-                next:
-                    ;
-                }
-                foreach (Method nonSetter in nonSetters)
-                {
-                    Class type = (Class) nonSetter.Namespace;
-                    string name = GetPropertyName(nonSetter.Name);
-                    Property baseProperty = type.GetBaseProperty(new Property { Name = name }, getTopmost: true);
-                    if (!type.IsInterface && baseProperty != null && baseProperty.IsVirtual)
-                    {
-                        bool isReadOnly = baseProperty.SetMethod == null;
-                        if (readOnly == isReadOnly)
-                        {
-                            GenerateProperty(nonSetter.Namespace, nonSetter,
-                                readOnly ? null : baseProperty.SetMethod);
-                        }
-                    }
-                }
-            }
-
-            private static string GetReadWritePropertyName(INamedDecl getter, string afterSet)
-            {
-                string name = GetPropertyName(getter.Name);
-                if (name != afterSet && name.StartsWith("is", StringComparison.Ordinal) &&
-                    name != "is")
-                {
-                    name = char.ToLowerInvariant(name[2]) + name.Substring(3);
-                }
-                return name;
-            }
-
-            private static Type GetUnderlyingType(QualifiedType type)
-            {
-                TagType tagType = type.Type as TagType;
-                if (tagType != null)
-                    return type.Type;
-                // TODO: we should normally check pointer types for const; 
-                // however, there's some bug, probably in the parser, that returns IsConst = false for "const Type& arg"
-                // so skip the check for the time being
-                PointerType pointerType = type.Type as PointerType;
-                return pointerType != null ? pointerType.Pointee : type.Type;
-            }
-
-            private static void GenerateProperty(DeclarationContext context, Method getter, Method setter = null)
-            {
-                GenerateProperty(GetPropertyName(getter.Name), context, getter, setter);
-            }
-
-            private static void GenerateProperty(string name, DeclarationContext context, Method getter, Method setter)
-            {
-                var type = (Class) context;
-                if (type.Properties.Any(p => p.Name == name &&
-                    p.ExplicitInterfaceImpl == getter.ExplicitInterfaceImpl))
-                    return;
-
-                var property = new Property
-                {
-                    Access = getter.Access == AccessSpecifier.Public ||
-                        (setter != null && setter.Access == AccessSpecifier.Public) ?
-                            AccessSpecifier.Public : AccessSpecifier.Protected,
-                    Name = name,
-                    Namespace = type,
-                    QualifiedType = getter.OriginalReturnType,
-                    OriginalNamespace = getter.OriginalNamespace
-                };
-                if (getter.IsOverride || (setter != null && setter.IsOverride))
-                {
-                    var baseVirtualProperty = type.GetBaseProperty(property, getTopmost: true);
-                    if (baseVirtualProperty != null && !baseVirtualProperty.IsVirtual)
-                    {
-                        // the only way the above can happen is if we are generating properties in abstract implementations
-                        // in which case we can have less naming conflicts since the abstract base can also contain non-virtual properties
-                        if (getter.SynthKind == FunctionSynthKind.AbstractImplCall)
-                            return;
-                        throw new Exception(string.Format(
-                            "Base of property {0} is not virtual while the getter is.",
-                            getter.QualifiedOriginalName));
-                    }
-                    if (baseVirtualProperty == null || baseVirtualProperty.SetMethod == null)
-                        setter = null;
-                }
-                property.GetMethod = getter;
-                property.SetMethod = setter;
-                property.ExplicitInterfaceImpl = getter.ExplicitInterfaceImpl;
-                if (property.ExplicitInterfaceImpl == null && setter != null)
-                {
-                    property.ExplicitInterfaceImpl = setter.ExplicitInterfaceImpl;
-                }
-                if (getter.Comment != null)
-                {
-                    property.Comment = CombineComments(getter, setter);
-                }
-                type.Properties.Add(property);
-                getter.GenerationKind = GenerationKind.Internal;
-                if (setter != null)
-                    setter.GenerationKind = GenerationKind.Internal;
-            }
-
-            private static RawComment CombineComments(Declaration getter, Declaration setter)
-            {
-                var comment = new RawComment
-                {
-                    Kind = getter.Comment.Kind,
-                    BriefText = getter.Comment.BriefText,
-                    Text = getter.Comment.Text
-                };
-                if (getter.Comment.FullComment != null)
-                {
-                    comment.FullComment = new FullComment();
-                    comment.FullComment.Blocks.AddRange(getter.Comment.FullComment.Blocks);
-                    if (getter != setter && setter != null && setter.Comment != null)
-                    {
-                        comment.BriefText += Environment.NewLine + setter.Comment.BriefText;
-                        comment.Text += Environment.NewLine + setter.Comment.Text;
-                        comment.FullComment.Blocks.AddRange(setter.Comment.FullComment.Blocks);
-                    }
-                }
-                return comment;
-            }
-
-            private static string GetPropertyName(string name)
-            {
-                var firstWord = GetFirstWord(name);
-                if (Match(firstWord, new[] { "get" }) && name != firstWord)
-                {
-                    if (char.IsLower(name[0]))
-                    {
-                        if (name.Length == 4)
-                        {
-                            return char.ToLowerInvariant(
-                                name[3]).ToString(CultureInfo.InvariantCulture);
-                        }
-                        return char.ToLowerInvariant(
-                            name[3]).ToString(CultureInfo.InvariantCulture) +
-                                        name.Substring(4);
-                    }
-                    return name.Substring(3);
-                }
-                return name;
-            }
-
-            private static string GetPropertyNameFromSetter(Method setter)
-            {
-                var name = setter.Name.Substring("set".Length);
-                if (string.IsNullOrEmpty(name))
-                    return name;
-                if (char.IsLower(setter.Name[0]) && !char.IsLower(name[0]))
-                    return char.ToLowerInvariant(name[0]) + name.Substring(1);
-                return name;
-            }
-
-            private void DistributeMethod(Method method)
-            {
-                Type returnType = method.OriginalReturnType.Type.Desugar();
-                if ((returnType.IsPrimitiveType(PrimitiveType.Void) ||
-                     returnType.IsPrimitiveType(PrimitiveType.Bool)) &&
-                     method.Parameters.Any(p => p.Kind == ParameterKind.Regular))
-                {
-                    if (method.Parameters.Count == 1)
-                        setters.Add(method);
-                    else if (method.Parameters.Count > 1)
-                        setMethods.Add(method);
-                }
-                else
-                {
-                    if (method.ConvertToProperty || IsGetter(method))
-                        getters.Add(method);
-                    if (method.Parameters.All(p => p.Kind == ParameterKind.IndirectReturnType))
-                        nonSetters.Add(method);
-                }
-            }
-
-            private bool IsGetter(Method method)
-            {
-                if (method.IsDestructor ||
-                    (method.OriginalReturnType.Type.IsPrimitiveType(PrimitiveType.Void)) ||
-                    method.Parameters.Any(p => p.Kind != ParameterKind.IndirectReturnType))
-                    return false;
-                var firstWord = GetFirstWord(method.Name);
-
-                if (firstWord.Length < method.Name.Length && Match(firstWord, new[] {"get", "is", "has"}))
-                    return true;
-
-                if (useHeuristics && !Match(firstWord, new[] {"to", "new"}) && !verbs.Contains(firstWord))
-                    return true;
-
-                return false;
-            }
-
-            private static bool Match(string prefix, IEnumerable<string> prefixes)
-            {
-                return prefixes.Any(p => prefix == p || prefix == p + '_');
-            }
-
-            private static string GetFirstWord(string name)
-            {
-                var firstWord = new List<char> { char.ToLowerInvariant(name[0]) };
-                for (int i = 1; i < name.Length; i++)
-                {
-                    var c = name[i];
-                    if (char.IsLower(c))
-                    {
-                        firstWord.Add(c);
-                        continue;
-                    }
-                    if (c == '_')
-                    {
-                        firstWord.Add(c);
-                        break;
-                    }
-                    if (char.IsUpper(c))
-                        break;
-                }
-                return new string(firstWord.ToArray());
-            }
-        }
-
-        private static readonly HashSet<string> verbs = new HashSet<string>();
-
         static GetterSetterToPropertyPass()
         {
             LoadVerbs();
@@ -350,25 +43,328 @@ namespace CppSharp.Passes
         }
 
         public GetterSetterToPropertyPass()
-        {
-            VisitOptions.VisitClassBases = false;
-            VisitOptions.VisitClassFields = false;
-            VisitOptions.VisitClassProperties = false;
-            VisitOptions.VisitClassMethods = false;
-            VisitOptions.VisitNamespaceEnums = false;
-            VisitOptions.VisitNamespaceTemplates = false;
-            VisitOptions.VisitNamespaceTypedefs = false;
-            VisitOptions.VisitNamespaceEvents = false;
-            VisitOptions.VisitNamespaceVariables = false;
-            VisitOptions.VisitFunctionParameters = false;
-            VisitOptions.VisitTemplateArguments = false;
-        }
+            => VisitOptions.ResetFlags(VisitFlags.ClassTemplateSpecializations);
 
         public override bool VisitClassDecl(Class @class)
         {
-            if (base.VisitClassDecl(@class))
-                new PropertyGenerator(@class, Options.UsePropertyDetectionHeuristics).GenerateProperties();
+            if (!base.VisitClassDecl(@class))
+                return false;
+
+            ProcessProperties(@class, GenerateProperties(@class));
             return false;
         }
+
+        protected virtual List<Property> GetProperties(Class @class) =>
+            new List<Property>();
+
+        protected IEnumerable<Property> GenerateProperties(Class @class)
+        {
+            List<Property> properties = GetProperties(@class);
+            foreach (Method method in @class.Methods.Where(
+                m => !m.IsConstructor && !m.IsDestructor && !m.IsOperator && m.IsGenerated &&
+                    (properties.All(p => p.GetMethod != m && p.SetMethod != m) ||
+                        m.OriginalFunction != null) &&
+                    m.SynthKind != FunctionSynthKind.DefaultValueOverload &&
+                    m.SynthKind != FunctionSynthKind.ComplementOperator &&
+                    m.SynthKind != FunctionSynthKind.FieldAcessor &&
+                    !m.ExcludeFromPasses.Contains(typeof(GetterSetterToPropertyPass))))
+            {
+                if (IsGetter(method))
+                {
+                    string name = GetPropertyName(method.Name);
+                    GetProperty(properties, method, name, method.OriginalReturnType);
+                    continue;
+                }
+                if (IsSetter(method))
+                {
+                    string name = GetPropertyNameFromSetter(method.Name);
+                    QualifiedType type = method.Parameters.First(
+                        p => p.Kind == ParameterKind.Regular).QualifiedType;
+                    GetProperty(properties, method, name, type, true);
+                }
+            }
+
+            return CleanUp(@class, properties);
+        }
+
+        private IEnumerable<Property> CleanUp(Class @class, List<Property> properties)
+        {
+            if (!Options.UsePropertyDetectionHeuristics)
+                return properties;
+
+            for (int i = properties.Count - 1; i >= 0; i--)
+            {
+                Property property = properties[i];
+                if (property.HasSetter || property.IsExplicitlyGenerated)
+                    continue;
+
+                string firstWord = GetFirstWord(property.GetMethod.Name);
+                if (firstWord.Length < property.GetMethod.Name.Length &&
+                    Match(firstWord, new[] { "get", "is", "has" }))
+                    continue;
+
+                if (Match(firstWord, new[] { "to", "new", "on" }) ||
+                    verbs.Contains(firstWord))
+                {
+                    property.GetMethod.GenerationKind = GenerationKind.Generate;
+                    @class.Properties.Remove(property);
+                    properties.RemoveAt(i);
+                }
+            }
+
+            return properties;
+        }
+
+        private static void GetProperty(List<Property> properties, Method method,
+            string name, QualifiedType type, bool isSetter = false)
+        {
+            Type underlyingType = GetUnderlyingType(type);
+            Class @class = (Class) method.Namespace;
+
+            Property property = properties.Find(
+                p => p.Field == null &&
+                    ((!isSetter && p.SetMethod?.IsStatic == method.IsStatic) ||
+                     (isSetter && p.GetMethod?.IsStatic == method.IsStatic)) &&
+                    ((p.HasGetter && GetUnderlyingType(
+                         p.GetMethod.OriginalReturnType).Equals(underlyingType)) ||
+                     (p.HasSetter && GetUnderlyingType(
+                         p.SetMethod.Parameters[0].QualifiedType).Equals(underlyingType))) &&
+                    Match(p, name));
+
+            if (property == null)
+                properties.Add(property = new Property { Name = name, QualifiedType = type });
+
+            method.AssociatedDeclaration = property;
+
+            if (isSetter)
+                property.SetMethod = method;
+            else
+            {
+                property.GetMethod = method;
+                property.QualifiedType = method.OriginalReturnType;
+            }
+
+            property.Access = (AccessSpecifier) Math.Max(
+                (int) (property.GetMethod ?? property.SetMethod).Access,
+                (int) method.Access);
+            
+            if (method.ExplicitInterfaceImpl != null)
+                property.ExplicitInterfaceImpl = method.ExplicitInterfaceImpl;
+        }
+
+        private static bool Match(Property property, string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return false;
+
+            if (property.Name == name)
+                return true;
+
+            if (property.Name == RemovePrefix(name))
+                return true;
+
+            if (RemovePrefix(property.Name) == name)
+            {
+                property.Name = property.OriginalName = name;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static string RemovePrefix(string identifier)
+        {
+            if (string.IsNullOrEmpty(identifier))
+                return identifier;
+
+            string name = GetPropertyName(identifier);
+            return name.StartsWith("is", StringComparison.Ordinal) && name != "is" ?
+                char.ToLowerInvariant(name[2]) + name.Substring(3) : name;
+        }
+
+        private static void ProcessProperties(Class @class, IEnumerable<Property> properties)
+        {
+            foreach (Property property in properties)
+            {
+                ProcessOverridden(@class, property);
+
+                if (!property.HasGetter)
+                    continue;
+                if (!property.HasSetter &&
+                    @class.GetOverloads(property.GetMethod).Any(
+                        m => m != property.GetMethod && !m.Ignore))
+                    continue;
+
+                Property conflict = properties.LastOrDefault(
+                    p => p.Name == property.Name && p != property &&
+                        p.ExplicitInterfaceImpl == property.ExplicitInterfaceImpl);
+                if (conflict?.GetMethod != null)
+                    conflict.GetMethod = null;
+
+                property.GetMethod.GenerationKind = GenerationKind.Internal;
+                if (property.SetMethod != null &&
+                    property.SetMethod.OriginalReturnType.Type.Desugar().IsPrimitiveType(PrimitiveType.Void))
+                    property.SetMethod.GenerationKind = GenerationKind.Internal;
+                property.Namespace = @class;
+                @class.Properties.Add(property);
+                RenameConflictingMethods(@class, property);
+                CombineComments(property);
+            }
+        }
+
+        private static void ProcessOverridden(Class @class, Property property)
+        {
+            if (!property.IsOverride)
+                return;
+
+            Property baseProperty = @class.GetBaseProperty(property);
+            if (baseProperty == null)
+            {
+                if (property.HasSetter)
+                    property.SetMethod = null;
+                else
+                    property.GetMethod = null;
+            }
+            else if (!property.HasGetter && baseProperty.HasSetter)
+                property.GetMethod = baseProperty.GetMethod;
+            else if (!property.HasSetter || !baseProperty.HasSetter)
+                property.SetMethod = baseProperty.SetMethod;
+        }
+
+        private static void RenameConflictingMethods(Class @class, Property property)
+        {
+            foreach (var method in @class.Methods.Where(
+                m => m.IsGenerated && m.Name == property.Name))
+            {
+                var oldName = method.Name;
+                method.Name = $@"get{char.ToUpperInvariant(method.Name[0])}{
+                    method.Name.Substring(1)}";
+                Diagnostics.Debug("Method {0}::{1} renamed to {2}",
+                    method.Namespace.Name, oldName, method.Name);
+            }
+            foreach (var @event in @class.Events.Where(
+                e => e.Name == property.Name))
+            {
+                var oldName = @event.Name;
+                @event.Name = $@"on{char.ToUpperInvariant(@event.Name[0])}{
+                    @event.Name.Substring(1)}";
+                Diagnostics.Debug("Event {0}::{1} renamed to {2}",
+                    @event.Namespace.Name, oldName, @event.Name);
+            }
+        }
+
+        private static Type GetUnderlyingType(QualifiedType type)
+        {
+            TagType tagType = type.Type as TagType;
+            if (tagType != null)
+                return type.Type;
+            // TODO: we should normally check pointer types for const; 
+            // however, there's some bug, probably in the parser, that returns IsConst = false for "const Type& arg"
+            // so skip the check for the time being
+            PointerType pointerType = type.Type as PointerType;
+            return pointerType != null ? pointerType.Pointee : type.Type;
+        }
+
+        private static void CombineComments(Property property)
+        {
+            Method getter = property.GetMethod;
+            if (getter.Comment == null)
+                return;
+
+            var comment = new RawComment
+            {
+                Kind = getter.Comment.Kind,
+                BriefText = getter.Comment.BriefText,
+                Text = getter.Comment.Text
+            };
+            if (getter.Comment.FullComment != null)
+            {
+                comment.FullComment = new FullComment();
+                comment.FullComment.Blocks.AddRange(getter.Comment.FullComment.Blocks);
+                Method setter = property.SetMethod;
+                if (getter != setter && setter?.Comment != null)
+                {
+                    comment.BriefText += Environment.NewLine + setter.Comment.BriefText;
+                    comment.Text += Environment.NewLine + setter.Comment.Text;
+                    comment.FullComment.Blocks.AddRange(setter.Comment.FullComment.Blocks);
+                }
+            }
+            property.Comment = comment;
+        }
+
+        private static string GetPropertyName(string name)
+        {
+            var firstWord = GetFirstWord(name);
+            if (Match(firstWord, new[] { "get" }) &&
+                (string.Compare(name, firstWord, StringComparison.InvariantCultureIgnoreCase) != 0) &&
+                !char.IsNumber(name[3]))
+            {
+                if (name.Length == 4)
+                {
+                    return char.ToLowerInvariant(
+                        name[3]).ToString(CultureInfo.InvariantCulture);
+                }
+                return char.ToLowerInvariant(
+                    name[3]).ToString(CultureInfo.InvariantCulture) +
+                                name.Substring(4);
+            }
+            return name;
+        }
+
+        private static string GetPropertyNameFromSetter(string name)
+        {
+            var nameBuilder = new StringBuilder(name);
+            string firstWord = GetFirstWord(name);
+            if (firstWord == "set" || firstWord == "set_")
+                nameBuilder.Remove(0, firstWord.Length);
+            if (nameBuilder.Length == 0)
+                return nameBuilder.ToString();
+
+            nameBuilder.TrimUnderscores();
+            nameBuilder[0] = char.ToLowerInvariant(nameBuilder[0]);
+            return nameBuilder.ToString();
+        }
+
+        private bool IsGetter(Method method) =>
+            !method.IsDestructor &&
+            !method.OriginalReturnType.Type.IsPrimitiveType(PrimitiveType.Void) &&
+            !method.Parameters.Any(p => p.Kind != ParameterKind.IndirectReturnType);
+
+        private static bool IsSetter(Method method)
+        {
+            Type returnType = method.OriginalReturnType.Type.Desugar();
+            return (returnType.IsPrimitiveType(PrimitiveType.Void) ||
+                returnType.IsPrimitiveType(PrimitiveType.Bool)) &&
+                method.Parameters.Count(p => p.Kind == ParameterKind.Regular) == 1;
+        }
+
+        private static bool Match(string prefix, IEnumerable<string> prefixes)
+        {
+            return prefixes.Any(p => prefix == p || prefix == p + '_');
+        }
+
+        private static string GetFirstWord(string name)
+        {
+            var firstWord = new List<char> { char.ToLowerInvariant(name[0]) };
+            for (int i = 1; i < name.Length; i++)
+            {
+                var c = name[i];
+                if (char.IsLower(c))
+                {
+                    firstWord.Add(c);
+                    continue;
+                }
+                if (c == '_')
+                {
+                    firstWord.Add(c);
+                    break;
+                }
+                if (char.IsUpper(c))
+                    break;
+            }
+            return new string(firstWord.ToArray());
+        }
+
+        private static readonly HashSet<string> verbs = new HashSet<string>();
     }
 }

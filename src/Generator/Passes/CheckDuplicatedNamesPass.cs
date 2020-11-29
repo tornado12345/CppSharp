@@ -4,8 +4,10 @@ using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
 using CppSharp.Generators;
+using CppSharp.Generators.C;
 using CppSharp.Generators.CLI;
 using CppSharp.Generators.CSharp;
+using CppSharp.Types;
 
 namespace CppSharp.Passes
 {
@@ -35,7 +37,7 @@ namespace CppSharp.Passes
             }
 
             var count = Count++;
-            if (count == 0)
+            if (count <= 1)
                 return false;
 
             decl.Name += count.ToString(CultureInfo.InvariantCulture);
@@ -49,7 +51,11 @@ namespace CppSharp.Passes
 
             var duplicate = functions.Keys.FirstOrDefault(f =>
                 function.SynthKind != FunctionSynthKind.DefaultValueOverload &&
-                f.Parameters.SequenceEqual(function.Parameters, ParameterTypeComparer.Instance));
+                f.Parameters.Where(p => p.Kind == ParameterKind.Regular ||
+                    p.Kind == ParameterKind.Extension).SequenceEqual(
+                    function.Parameters.Where(p => p.Kind == ParameterKind.Regular ||
+                        p.Kind == ParameterKind.Extension),
+                    ParameterTypeComparer.Instance));
 
             if (duplicate == null)
             {
@@ -95,7 +101,11 @@ namespace CppSharp.Passes
 
         public class ParameterTypeComparer : IEqualityComparer<Parameter>
         {
-            public static readonly ParameterTypeComparer Instance = new ParameterTypeComparer();
+            public static readonly ParameterTypeComparer Instance =
+                new ParameterTypeComparer();
+
+            public static TypeMapDatabase TypeMaps { get; set; }
+            public static GeneratorKind GeneratorKind { get; set; }
 
             public bool Equals(Parameter x, Parameter y)
             {
@@ -104,11 +114,40 @@ namespace CppSharp.Passes
                 if (left.Equals(right))
                     return true;
 
+                if (CheckForSpecializations(left, right))
+                    return true;
+
                 // TODO: some target languages might make a difference between values and pointers
                 Type leftPointee = left.GetPointee();
                 Type rightPointee = right.GetPointee();
-                return (leftPointee != null && leftPointee.Desugar(false).Equals(right)) ||
-                    (rightPointee != null && rightPointee.Desugar(false).Equals(left));
+
+                if (CheckForSpecializations(leftPointee, rightPointee))
+                    return true;
+
+                return leftPointee != null && rightPointee != null &&
+                    leftPointee.GetMappedType(TypeMaps, GeneratorKind).Equals(
+                    rightPointee.GetMappedType(TypeMaps, GeneratorKind));
+            }
+
+            private static bool CheckForSpecializations(Type leftPointee, Type rightPointee)
+            {
+                Class leftClass;
+                Class rightClass;
+                if (!leftPointee.TryGetDeclaration(out leftClass) ||
+                    !rightPointee.TryGetDeclaration(out rightClass))
+                    return false;
+
+                var leftSpecialization = leftClass as ClassTemplateSpecialization ??
+                    leftClass.Namespace as ClassTemplateSpecialization;
+                var rightSpecialization = rightClass as ClassTemplateSpecialization ??
+                    rightClass.Namespace as ClassTemplateSpecialization;
+
+                return leftSpecialization != null && rightSpecialization != null &&
+                    leftSpecialization.TemplatedDecl.TemplatedDecl.Equals(
+                        rightSpecialization.TemplatedDecl.TemplatedDecl) &&
+                    leftSpecialization.Arguments.SequenceEqual(
+                        rightSpecialization.Arguments, TemplateArgumentComparer.Instance) &&
+                    leftClass.OriginalName == rightClass.OriginalName;
             }
 
             public int GetHashCode(Parameter obj)
@@ -118,32 +157,76 @@ namespace CppSharp.Passes
 
             public static TypePrinter TypePrinter { get; set; }
         }
+
+        public class TemplateArgumentComparer : IEqualityComparer<TemplateArgument>
+        {
+            public static readonly TemplateArgumentComparer Instance =
+                new TemplateArgumentComparer();
+
+            public bool Equals(TemplateArgument x, TemplateArgument y)
+            {
+                if (x.Kind != TemplateArgument.ArgumentKind.Type ||
+                    y.Kind != TemplateArgument.ArgumentKind.Type)
+                    return x.Equals(y);
+                Type left = x.Type.Type.GetMappedType(ParameterTypeComparer.TypeMaps,
+                    ParameterTypeComparer.GeneratorKind);
+                Type right = y.Type.Type.GetMappedType(ParameterTypeComparer.TypeMaps,
+                    ParameterTypeComparer.GeneratorKind);
+                // consider Type and const Type the same
+                if (left.IsReference() && !left.IsPointerToPrimitiveType())
+                    left = left.GetPointee();
+                if (right.IsReference() && !right.IsPointerToPrimitiveType())
+                    right = right.GetPointee();
+                return left.Equals(right);
+            }
+
+            public int GetHashCode(TemplateArgument obj)
+            {
+                return obj.GetHashCode();
+            }
+        }
     }
 
     public class CheckDuplicatedNamesPass : TranslationUnitPass
     {
-        private readonly IDictionary<string, DeclarationName> names;
-
-        public CheckDuplicatedNamesPass()
-        {
-            ClearVisitedDeclarations = false;
-            names = new Dictionary<string, DeclarationName>();
-        }
+        private readonly IDictionary<string, DeclarationName> names = new Dictionary<string, DeclarationName>();
 
         public override bool VisitASTContext(ASTContext context)
         {
-            TypePrinter typePrinter = null;
-            switch (Options.GeneratorKind)
+            var typePrinter = GetTypePrinter(Options.GeneratorKind, Context);
+            DeclarationName.ParameterTypeComparer.TypePrinter = typePrinter;
+            DeclarationName.ParameterTypeComparer.TypeMaps = Context.TypeMaps;
+            DeclarationName.ParameterTypeComparer.GeneratorKind = Options.GeneratorKind;
+            return base.VisitASTContext(context);
+        }
+
+        private TypePrinter GetTypePrinter(GeneratorKind kind, BindingContext context)
+        {
+            TypePrinter typePrinter;
+            switch (kind)
             {
+                case GeneratorKind.C:
+                    typePrinter = new CppTypePrinter(Context)
+                    {
+                        PrintFlavorKind = CppTypePrintFlavorKind.C
+                    };
+                    break;
+                case GeneratorKind.CPlusPlus:
+                case GeneratorKind.QuickJS:
+                case GeneratorKind.NAPI:
+                    typePrinter = new CppTypePrinter(Context);
+                    break;
                 case GeneratorKind.CLI:
                     typePrinter = new CLITypePrinter(Context);
                     break;
                 case GeneratorKind.CSharp:
                     typePrinter = new CSharpTypePrinter(Context);
                     break;
+                default:
+                    throw new System.NotImplementedException();
             }
-            DeclarationName.ParameterTypeComparer.TypePrinter = typePrinter;
-            return base.VisitASTContext(context);
+
+            return typePrinter;
         }
 
         public override bool VisitProperty(Property decl)

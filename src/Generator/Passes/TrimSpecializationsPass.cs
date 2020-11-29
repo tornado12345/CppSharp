@@ -1,29 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
-using CppSharp.Types;
 using CppSharp.Utils;
 
 namespace CppSharp.Passes
 {
     public class TrimSpecializationsPass : TranslationUnitPass
     {
-        public TrimSpecializationsPass()
-        {
-            VisitOptions.VisitClassBases = false;
-            VisitOptions.VisitClassTemplateSpecializations = false;
-            VisitOptions.VisitEventParameters = false;
-            VisitOptions.VisitFunctionParameters = false;
-            VisitOptions.VisitFunctionReturnType = false;
-            VisitOptions.VisitNamespaceEnums = false;
-            VisitOptions.VisitNamespaceEvents = false;
-            VisitOptions.VisitNamespaceTemplates = false;
-            VisitOptions.VisitNamespaceTypedefs = false;
-            VisitOptions.VisitNamespaceVariables = false;
-            VisitOptions.VisitTemplateArguments = false;
-        }
+        public TrimSpecializationsPass() => VisitOptions.ResetFlags(
+            VisitFlags.ClassFields | VisitFlags.ClassMethods |
+            VisitFlags.ClassProperties | VisitFlags.NamespaceVariables);
 
         public override bool VisitASTContext(ASTContext context)
         {
@@ -85,11 +72,24 @@ namespace CppSharp.Passes
                 return true;
             }
 
-            TypeMap typeMap;
-            if (!Context.TypeMaps.FindTypeMap(field.Type, out typeMap) &&
-                !ASTUtils.CheckTypeForSpecialization(field.Type,
+            if (!ASTUtils.CheckTypeForSpecialization(field.Type,
                     field, AddSpecialization, Context.TypeMaps))
                 CheckForInternalSpecialization(field, field.Type);
+
+            return true;
+        }
+
+        public override bool VisitVariableDecl(Variable variable)
+        {
+            if (!base.VisitVariableDecl(variable))
+                return false;
+
+            if (variable.Access == AccessSpecifier.Public)
+            {
+                ASTUtils.CheckTypeForSpecialization(variable.Type,
+                    variable, AddSpecialization, Context.TypeMaps);
+                return true;
+            }
 
             return true;
         }
@@ -127,22 +127,10 @@ namespace CppSharp.Passes
                 s => !s.IsExplicitlyGenerated && internalSpecializations.Contains(s)))
                 specialization.GenerationKind = GenerationKind.Internal;
 
-            Func<TemplateArgument, bool> allPointers =
-                a => a.Type.Type != null && a.Type.Type.IsAddress();
-            var groups = (from specialization in template.Specializations
-                          group specialization by specialization.Arguments.All(allPointers)
-                          into @group
-                          select @group).ToList();
-
-            foreach (var group in groups.Where(g => g.Key))
-                foreach (var specialization in group.Skip(1))
-                    template.Specializations.Remove(specialization);
-
             for (int i = template.Specializations.Count - 1; i >= 0; i--)
             {
                 var specialization = template.Specializations[i];
-                if (specialization is ClassTemplatePartialSpecialization &&
-                    !specialization.Arguments.All(allPointers))
+                if (specialization is ClassTemplatePartialSpecialization)
                     template.Specializations.RemoveAt(i);
             }
 

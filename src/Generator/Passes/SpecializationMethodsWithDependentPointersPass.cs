@@ -26,22 +26,7 @@ namespace CppSharp.Passes
     public class SpecializationMethodsWithDependentPointersPass : TranslationUnitPass
     {
         public SpecializationMethodsWithDependentPointersPass()
-        {
-            VisitOptions.VisitClassBases = false;
-            VisitOptions.VisitClassFields = false;
-            VisitOptions.VisitClassMethods = false;
-            VisitOptions.VisitClassProperties = false;
-            VisitOptions.VisitClassTemplateSpecializations = false;
-            VisitOptions.VisitEventParameters = false;
-            VisitOptions.VisitFunctionParameters = false;
-            VisitOptions.VisitFunctionReturnType = false;
-            VisitOptions.VisitNamespaceEnums = false;
-            VisitOptions.VisitNamespaceEvents = false;
-            VisitOptions.VisitNamespaceTemplates = false;
-            VisitOptions.VisitNamespaceTypedefs = false;
-            VisitOptions.VisitNamespaceVariables = false;
-            VisitOptions.VisitTemplateArguments = false;
-        }
+            => VisitOptions.ResetFlags(VisitFlags.Default);
 
         public override bool VisitASTContext(ASTContext context)
         {
@@ -72,8 +57,11 @@ namespace CppSharp.Passes
                 foreach (var method in methodsWithDependentPointers.Where(
                     m => m.SynthKind == FunctionSynthKind.None))
                 {
-                    var specializedMethod = specialization.Methods.First(
+                    var specializedMethod = specialization.Methods.FirstOrDefault(
                         m => m.InstantiatedFrom == method);
+                    if (specializedMethod == null)
+                        continue;
+
                     Method extensionMethod = GetExtensionMethodForDependentPointer(specializedMethod);
                     classExtensions.Methods.Add(extensionMethod);
                     extensionMethod.Namespace = classExtensions;
@@ -126,13 +114,15 @@ namespace CppSharp.Passes
                     var thisParameter = new Parameter();
                     thisParameter.QualifiedType = new QualifiedType(new PointerType(
                         new QualifiedType(new TagType(specializedMethod.Namespace))));
-                    thisParameter.Name = "@this";
+                    thisParameter.Name = "this";
                     thisParameter.Kind = ParameterKind.Extension;
                     thisParameter.Namespace = extensionMethod;
                     extensionMethod.Parameters.Insert(0, thisParameter);
                 }
             }
 
+            specializedMethod.Name = specializedMethod.OriginalName;
+            extensionMethod.Name = extensionMethod.OriginalName;
             extensionMethod.OriginalFunction = specializedMethod;
             extensionMethod.Kind = CXXMethodKind.Normal;
             extensionMethod.IsStatic = true;

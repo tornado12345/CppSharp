@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 using CppSharp.AST;
 using CppSharp.Generators;
 using CppSharp.Utils;
@@ -17,14 +18,15 @@ namespace CppSharp.Tests
             base.Setup(driver);
             driver.Options.GenerateDefaultValuesForArguments = true;
             driver.Options.GenerateClassTemplates = true;
-
+            driver.Options.DependentNameSpaces.Add("System.Runtime.CompilerServices");
             driver.Options.Modules[1].IncludeDirs.Add(GetTestsDirectory("NamespacesDerived"));
             var @base = "NamespacesBase";
             var module = driver.Options.AddModule(@base);
             module.IncludeDirs.Add(Path.GetFullPath(GetTestsDirectory(@base)));
             module.Headers.Add($"{@base}.h");
             module.OutputNamespace = @base;
-            module.SharedLibraryName = $"{@base}.Native";
+            module.LibraryDirs.Add(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location));
+            module.Libraries.Add($"{@base}.Native");
             driver.Options.Modules[1].Dependencies.Add(module);
         }
 
@@ -33,7 +35,6 @@ namespace CppSharp.Tests
             driver.Generator.OnUnitGenerated += o =>
             {
                 Block firstBlock = o.Outputs[0].RootBlock.Blocks[1];
-                firstBlock.WriteLine("using System.Runtime.CompilerServices;");
                 firstBlock.NewLine();
                 firstBlock.WriteLine("[assembly:InternalsVisibleTo(\"NamespacesDerived.CSharp\")]");
             };

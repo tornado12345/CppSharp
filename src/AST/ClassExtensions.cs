@@ -5,7 +5,7 @@ using CppSharp.AST.Extensions;
 
 namespace CppSharp.AST
 {
-    public static class ClassExtensions 
+    public static class ClassExtensions
     {
         public static IEnumerable<Function> GetFunctionOverloads(this Class @class,
             Function function)
@@ -13,6 +13,20 @@ namespace CppSharp.AST
             if (function.IsOperator)
                 return @class.FindOperator(function.OperatorKind);
             return @class.Methods.Where(method => method.Name == function.Name);
+        }
+
+        public static bool HasClassInHierarchy(this Class @class, string name)
+        {
+            return @class.FindHierarchy(c => c.OriginalName == name || c.Name == name);
+        }
+
+        public static bool FindHierarchy(this Class @class,
+            Func<Class, bool> func)
+        {
+            bool FindHierarchyImpl(Class c, Func<Class, bool> f) => func(c) ||
+                    c.Bases.Any(b => b.IsClass && FindHierarchyImpl(b.Class, f));
+
+            return @class.Bases.Any(b => b.IsClass && FindHierarchyImpl(b.Class, func));
         }
 
         public static IEnumerable<T> FindHierarchy<T>(this Class @class,
@@ -28,6 +42,20 @@ namespace CppSharp.AST
                 foreach(var elem in @base.Class.FindHierarchy(func))
                     yield return elem;
             }
+        }
+
+        public static List<Method> GetAbstractMethods(this Class @class)
+        {
+            var abstractMethods = @class.Methods.Where(m => m.IsPure).ToList();
+            var abstractOverrides = abstractMethods.Where(a => a.IsOverride).ToArray();
+            foreach (var baseAbstractMethods in @class.Bases.Select(b => GetAbstractMethods(b.Class)))
+            {
+                for (var i = baseAbstractMethods.Count - 1; i >= 0; i--)
+                    if (abstractOverrides.Any(a => a.CanOverride(baseAbstractMethods[i])))
+                        baseAbstractMethods.RemoveAt(i);
+                abstractMethods.AddRange(baseAbstractMethods);
+            }
+            return abstractMethods;
         }
 
         public static Class GetNonIgnoredRootBase(this Class @class)
@@ -55,8 +83,29 @@ namespace CppSharp.AST
             return methods.FirstOrDefault(@override.CanOverride);
         }
 
-        public static Property GetBaseProperty(this Class @class, Property @override,
-            bool onlyFirstBase = false, bool getTopmost = false)
+        public static Property GetBaseProperty(this Class @class, Property @override)
+        {
+            foreach (var @base in @class.Bases.Where(b => b.IsClass))
+            {
+                Class baseClass = @base.Class.OriginalClass ?? @base.Class;
+                Property baseProperty = baseClass.Properties.Find(p =>
+                    (@override.GetMethod?.IsOverride == true &&
+                     @override.GetMethod.BaseMethod == p.GetMethod) ||
+                    (@override.SetMethod?.IsOverride == true &&
+                     @override.SetMethod.BaseMethod == p.SetMethod) ||
+                    (@override.Field != null && @override.Field == p.Field));
+                if (baseProperty != null)
+                    return baseProperty;
+
+                baseProperty = GetBaseProperty(@base.Class, @override);
+                if (baseProperty != null)
+                    return baseProperty;
+            }
+            return null;
+        }
+
+        public static Property GetBasePropertyByName(this Class @class, Property @override,
+            bool onlyFirstBase = false)
         {
             foreach (var @base in @class.Bases)
             {
@@ -66,44 +115,26 @@ namespace CppSharp.AST
                     (onlyFirstBase && @base.Class.IsInterface))
                     continue;
 
-                Property baseProperty;
-                if (!getTopmost)
-                {
-                    baseProperty = @base.Class.GetBaseProperty(@override, onlyFirstBase);
-                    if (baseProperty != null)
-                        return baseProperty;
-                }
-
                 var properties = @base.Class.Properties.Concat(@base.Class.Declarations.OfType<Property>());
-                baseProperty = (from property in properties
-                    where property.OriginalName == @override.OriginalName &&
-                        property.Parameters.SequenceEqual(@override.Parameters,
-                            ParameterTypeComparer.Instance)
-                    select property).FirstOrDefault();
+                Property baseProperty = (from property in properties
+                                         where property.OriginalName == @override.OriginalName &&
+                                             property.Parameters.SequenceEqual(@override.Parameters,
+                                                 ParameterTypeComparer.Instance)
+                                         select property).FirstOrDefault();
 
                 if (baseProperty != null)
                     return baseProperty;
 
-                if (getTopmost)
-                {
-                    baseProperty = @base.Class.GetBaseProperty(@override, onlyFirstBase, true);
-                    if (baseProperty != null)
-                        return baseProperty;
-                }
+                baseProperty = @base.Class.GetBasePropertyByName(@override, onlyFirstBase);
+                if (baseProperty != null)
+                    return baseProperty;
             }
             return null;
         }
 
-        public static bool HasNonAbstractBasePropertyInPrimaryBase(this Class @class, Property property)
-        {
-            var baseProperty = @class.GetBaseProperty(property, true, true);
-            return baseProperty != null && !baseProperty.IsPure &&
-                !((Class) baseProperty.OriginalNamespace).IsInterface;
-        }
-
         public static Property GetPropertyByName(this Class @class, string propertyName)
         {
-            Property property = @class.Properties.FirstOrDefault(m => m.Name == propertyName);
+            Property property = @class.Properties.Find(m => m.Name == propertyName);
             if (property != null)
                 return property;
 
@@ -119,10 +150,10 @@ namespace CppSharp.AST
 
         public static Property GetPropertyByConstituentMethod(this Class @class, Method method)
         {
-            var property = @class.Properties.FirstOrDefault(p => p.GetMethod == method);
+            var property = @class.Properties.Find(p => p.GetMethod == method);
             if (property != null)
                 return property;
-            property = @class.Properties.FirstOrDefault(p => p.SetMethod == method);
+            property = @class.Properties.Find(p => p.SetMethod == method);
             if (property != null)
                 return property;
 
@@ -140,7 +171,7 @@ namespace CppSharp.AST
             Class @base = null;
 
             if (@class.HasBaseClass)
-                @base = @class.Bases[0].Class;
+                @base = @class.BaseClass;
 
             return @base?.IsRefType == true && @base.IsGenerated;
         }

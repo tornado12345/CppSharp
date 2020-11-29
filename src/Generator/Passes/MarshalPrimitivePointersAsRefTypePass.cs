@@ -7,6 +7,9 @@ namespace CppSharp.Passes
 {
     public class MarshalPrimitivePointersAsRefTypePass : TranslationUnitPass
     {
+        public MarshalPrimitivePointersAsRefTypePass() => VisitOptions.ResetFlags(
+            VisitFlags.ClassMethods | VisitFlags.ClassTemplateSpecializations);
+
         public override bool VisitFunctionDecl(Function function)
         {
             if (!base.VisitFunctionDecl(function) ||

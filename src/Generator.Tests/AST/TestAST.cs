@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
+using CppSharp.Generators;
 using CppSharp.Generators.C;
 using CppSharp.Generators.CSharp;
 using CppSharp.Passes;
@@ -12,9 +13,14 @@ namespace CppSharp.Generator.Tests.AST
     [TestFixture]
     public class TestAST : ASTTestFixture
     {
+        private BindingContext Context;
+
         [OneTimeSetUp]
         public void Init()
         {
+            Context = new BindingContext(new DriverOptions());
+            Context.TypeMaps = new Types.TypeMapDatabase(Context);
+
             CppSharp.AST.Type.TypePrinterDelegate = type =>
             {
                 PrimitiveType primitiveType;
@@ -26,7 +32,7 @@ namespace CppSharp.Generator.Tests.AST
         [OneTimeTearDown]
         public void CleanUp()
         {
-            ParserOptions.Dispose();
+            Driver.Dispose();
         }
 
         [Test]
@@ -219,6 +225,11 @@ namespace CppSharp.Generator.Tests.AST
             {
                 throw new NotImplementedException();
             }
+
+            public bool VisitUnresolvedUsingDecl(UnresolvedUsingTypename unresolvedUsingTypename)
+            {
+                throw new NotImplementedException();
+            }
         }
         #endregion
 
@@ -282,10 +293,10 @@ namespace CppSharp.Generator.Tests.AST
             var paramType = ctor.Parameters[0].Type as TemplateParameterType;
             Assert.IsNotNull(paramType);
             Assert.AreEqual(templateTypeParameter, paramType.Parameter);
-            Assert.AreEqual(5, template.Specializations.Count);
+            Assert.AreEqual(6, template.Specializations.Count);
             Assert.AreEqual(TemplateSpecializationKind.ExplicitInstantiationDefinition, template.Specializations[0].SpecializationKind);
-            Assert.AreEqual(TemplateSpecializationKind.ExplicitInstantiationDefinition, template.Specializations[3].SpecializationKind);
-            Assert.AreEqual(TemplateSpecializationKind.Undeclared, template.Specializations[4].SpecializationKind);
+            Assert.AreEqual(TemplateSpecializationKind.ExplicitInstantiationDefinition, template.Specializations[4].SpecializationKind);
+            Assert.AreEqual(TemplateSpecializationKind.Undeclared, template.Specializations[5].SpecializationKind);
             var typeDef = AstContext.FindTypedef("TestTemplateClassInt").FirstOrDefault();
             Assert.IsNotNull(typeDef, "Couldn't find TestTemplateClassInt typedef.");
             var integerInst = typeDef.Type as TemplateSpecializationType;
@@ -295,6 +306,18 @@ namespace CppSharp.Generator.Tests.AST
             ClassTemplateSpecialization classTemplateSpecialization;
             Assert.IsTrue(typeDef.Type.TryGetDeclaration(out classTemplateSpecialization));
             Assert.AreSame(classTemplateSpecialization.TemplatedDecl.TemplatedClass, template.TemplatedClass);
+        }
+
+        [Test]
+        public void TestDeprecatedAttrs()
+        {
+            var deprecated_func = AstContext.FindFunction("deprecated_func");
+            Assert.IsNotNull(deprecated_func);
+            Assert.IsTrue(deprecated_func.First().IsDeprecated);
+
+            var non_deprecated_func = AstContext.FindFunction("non_deprecated_func");
+            Assert.IsNotNull(non_deprecated_func);
+            Assert.IsFalse(non_deprecated_func.First().IsDeprecated);
         }
 
         [Test]
@@ -383,15 +406,18 @@ namespace CppSharp.Generator.Tests.AST
         public void TestComments()
         {
             var @class = AstContext.FindCompleteClass("TestComments");
-            var commentClass = @class.Comment.FullComment.CommentToString(CommentKind.BCPLSlash);
+            var textGenerator = new TextGenerator();
+            textGenerator.Print(@class.Comment.FullComment, CommentKind.BCPLSlash);
             Assert.AreEqual(@"/// <summary>
 /// <para>Hash set/map base class.</para>
 /// <para>Note that to prevent extra memory use due to vtable pointer, %HashBase intentionally does not declare a virtual destructor</para>
 /// <para>and therefore %HashBase pointers should never be used.</para>
-/// </summary>".Replace("\r", string.Empty), commentClass.Replace("\r", string.Empty));
+/// </summary>
+".Replace("\r", string.Empty), textGenerator.StringBuilder.Replace("\r", string.Empty).ToString());
 
             var method = @class.Methods.First(m => m.Name == "GetIOHandlerControlSequence");
-            var commentMethod = method.Comment.FullComment.CommentToString(CommentKind.BCPL);
+            textGenerator.StringBuilder.Clear();
+            textGenerator.Print(method.Comment.FullComment, CommentKind.BCPL);
             Assert.AreEqual(@"// <summary>
 // <para>Get the string that needs to be written to the debugger stdin file</para>
 // <para>handle when a control character is typed.</para>
@@ -407,10 +433,12 @@ namespace CppSharp.Generator.Tests.AST
 // <para>to have them do what normally would happen when using a real</para>
 // <para>terminal, so this function allows GUI programs to emulate this</para>
 // <para>functionality.</para>
-// </remarks>".Replace("\r", string.Empty), commentMethod.Replace("\r", string.Empty));
+// </remarks>
+".Replace("\r", string.Empty), textGenerator.StringBuilder.Replace("\r", string.Empty).ToString());
 
             var methodTestDoxygen = @class.Methods.First(m => m.Name == "SBAttachInfo");
-            var commentMethodDoxygen = methodTestDoxygen.Comment.FullComment.CommentToString(CommentKind.BCPLSlash);
+            textGenerator.StringBuilder.Clear();
+            textGenerator.Print(methodTestDoxygen.Comment.FullComment, CommentKind.BCPLSlash);
             Assert.AreEqual(@"/// <summary>Attach to a process by name.</summary>
 /// <param name=""path"">A full or partial name for the process to attach to.</param>
 /// <param name=""wait_for"">
@@ -420,11 +448,13 @@ namespace CppSharp.Generator.Tests.AST
 /// <remarks>
 /// <para>This function implies that a future call to SBTarget::Attach(...)</para>
 /// <para>will be synchronous.</para>
-/// </remarks>".Replace("\r", string.Empty), commentMethodDoxygen.Replace("\r", string.Empty));
+/// </remarks>
+".Replace("\r", string.Empty), textGenerator.StringBuilder.Replace("\r", string.Empty).ToString());
 
             var methodDoxygenCustomTags = @class.Methods.First(m => m.Name == "glfwDestroyWindow");
-            new CleanCommentsPass { }.VisitFull(methodDoxygenCustomTags.Comment.FullComment);
-            var commentMethodDoxygenCustomTag = methodDoxygenCustomTags.Comment.FullComment.CommentToString(CommentKind.BCPLSlash);
+            new CleanCommentsPass().VisitFull(methodDoxygenCustomTags.Comment.FullComment);
+            textGenerator.StringBuilder.Clear();
+            textGenerator.Print(methodDoxygenCustomTags.Comment.FullComment, CommentKind.BCPLSlash);
             Assert.AreEqual(@"/// <summary>Destroys the specified window and its context.</summary>
 /// <param name=""window"">The window to destroy.</param>
 /// <remarks>
@@ -437,7 +467,8 @@ namespace CppSharp.Generator.Tests.AST
 /// <para>This function must not be called from a callback.</para>
 /// <para>This function must only be called from the main thread.</para>
 /// <para>Added in version 3.0.  Replaces `glfwCloseWindow`.</para>
-/// </remarks>".Replace("\r", string.Empty), commentMethodDoxygenCustomTag.Replace("\r", string.Empty));
+/// </remarks>
+".Replace("\r", string.Empty), textGenerator.StringBuilder.Replace("\r", string.Empty).ToString());
         }
 
         [Test]
@@ -460,11 +491,15 @@ namespace CppSharp.Generator.Tests.AST
         [Test]
         public void TestPrintingConstPointerWithConstType()
         {
-            var cppTypePrinter = new CppTypePrinter { ScopeKind = TypePrintScopeKind.Qualified };
+            var cppTypePrinter = new CppTypePrinter(Context)
+            {
+                ScopeKind = TypePrintScopeKind.Qualified,
+                ResolveTypeMaps = false
+            };
             var builtin = new BuiltinType(PrimitiveType.Char);
             var pointee = new QualifiedType(builtin, new TypeQualifiers { IsConst = true });
             var pointer = new QualifiedType(new PointerType(pointee), new TypeQualifiers { IsConst = true });
-            var type = pointer.Visit(cppTypePrinter).Type;
+            string type = pointer.Visit(cppTypePrinter);
             Assert.That(type, Is.EqualTo("const char* const"));
         }
 
@@ -472,7 +507,7 @@ namespace CppSharp.Generator.Tests.AST
         public void TestPrintingSpecializationWithConstValue()
         {
             var template = AstContext.FindDecl<ClassTemplate>("TestSpecializationArguments").First();
-            var cppTypePrinter = new CppTypePrinter { ScopeKind = TypePrintScopeKind.Qualified };
+            var cppTypePrinter = new CppTypePrinter(Context) { ScopeKind = TypePrintScopeKind.Qualified };
             Assert.That(template.Specializations.Last().Visit(cppTypePrinter).Type,
                 Is.EqualTo("TestSpecializationArguments<const TestASTEnumItemByName>"));
         }
@@ -487,11 +522,20 @@ namespace CppSharp.Generator.Tests.AST
         [Test]
         public void TestFunctionSpecifications()
         {
-            var constExprNoExcept = AstContext.FindFunction("constExprNoExcept").First();
-            Assert.IsTrue(constExprNoExcept.IsConstExpr);
-            var functionType = (FunctionType) constExprNoExcept.FunctionType.Type;
-            Assert.That(functionType.ExceptionSpecType,
+            var constExpr = AstContext.FindFunction("constExpr").First();
+            Assert.IsTrue(constExpr.IsConstExpr);
+
+            var noExcept = AstContext.FindFunction("noExcept").First();
+            Assert.That(((FunctionType) noExcept.FunctionType.Type).ExceptionSpecType,
                 Is.EqualTo(ExceptionSpecType.BasicNoexcept));
+
+            var noExceptTrue = AstContext.FindFunction("noExceptTrue").First();
+            Assert.That(((FunctionType) noExceptTrue.FunctionType.Type).ExceptionSpecType,
+                Is.EqualTo(ExceptionSpecType.NoexceptTrue));
+
+            var noExceptFalse = AstContext.FindFunction("noExceptFalse").First();
+            Assert.That(((FunctionType) noExceptFalse.FunctionType.Type).ExceptionSpecType,
+                Is.EqualTo(ExceptionSpecType.NoexceptFalse));
 
             var regular = AstContext.FindFunction("testSignature").First();
             Assert.IsFalse(regular.IsConstExpr);
@@ -515,7 +559,7 @@ namespace CppSharp.Generator.Tests.AST
         [Test]
         public void TestVolatile()
         {
-            var cppTypePrinter = new CppTypePrinter { ScopeKind = TypePrintScopeKind.Qualified };
+            var cppTypePrinter = new CppTypePrinter(Context) { ScopeKind = TypePrintScopeKind.Qualified };
             var builtin = new BuiltinType(PrimitiveType.Char);
             var pointee = new QualifiedType(builtin, new TypeQualifiers { IsConst = true, IsVolatile = true });
             var type = pointee.Visit(cppTypePrinter).Type;
@@ -533,8 +577,8 @@ namespace CppSharp.Generator.Tests.AST
         public void TestPrintNestedInSpecialization()
         {
             var template = AstContext.FindDecl<ClassTemplate>("TestTemplateClass").First();
-            var cppTypePrinter = new CppTypePrinter { ScopeKind = TypePrintScopeKind.Qualified };
-            Assert.That(template.Specializations[3].Classes.First().Visit(cppTypePrinter).Type,
+            var cppTypePrinter = new CppTypePrinter(Context) { ScopeKind = TypePrintScopeKind.Qualified };
+            Assert.That(template.Specializations[4].Classes.First().Visit(cppTypePrinter).Type,
                 Is.EqualTo("TestTemplateClass<Math::Complex>::NestedInTemplate"));
         }
 
@@ -542,7 +586,7 @@ namespace CppSharp.Generator.Tests.AST
         public void TestPrintQualifiedSpecialization()
         {
             var functionWithSpecializationArg = AstContext.FindFunction("functionWithSpecializationArg").First();
-            var cppTypePrinter = new CppTypePrinter { ScopeKind = TypePrintScopeKind.Qualified };
+            var cppTypePrinter = new CppTypePrinter(Context) { ScopeKind = TypePrintScopeKind.Qualified };
             Assert.That(functionWithSpecializationArg.Parameters[0].Visit(cppTypePrinter).Type,
                 Is.EqualTo("const TestTemplateClass<int>"));
         }
@@ -579,6 +623,33 @@ namespace CppSharp.Generator.Tests.AST
 
             var @classC = AstContext.FindClass("ClassC").First();
             Assert.That(@classC.Redeclarations.Count, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void TestPrivateCCtorCopyAssignment()
+        {
+            Class @class = AstContext.FindCompleteClass("HasPrivateCCtorCopyAssignment");
+            Assert.That(@class.Constructors.Any(c => c.Parameters.Count == 0), Is.True);
+            Assert.That(@class.Constructors.Any(c => c.IsCopyConstructor), Is.True);
+            Assert.That(@class.Methods.Any(o => o.OperatorKind == CXXOperatorKind.Equal), Is.True);
+        }
+
+        [Test]
+        public void TestCompletionSpecializationInFunction()
+        {
+            Function function = AstContext.FindFunction("returnIncompleteTemplateSpecialization").First();
+            function.ReturnType.Type.TryGetClass(out Class specialization);
+            Assert.That(specialization.IsIncomplete, Is.False);
+        }
+
+        [Test]
+        public void TestPreprocessedEntities()
+        {
+            var unit = AstContext.TranslationUnits.First(u => u.FileName == "AST.h");
+            var macro = unit.PreprocessedEntities.OfType<MacroDefinition>()
+                .FirstOrDefault(exp => exp.Name == "MACRO");
+            Assert.NotNull(macro);
+            Assert.AreEqual("(x, y, z) x##y##z", macro.Expression);
         }
     }
 }

@@ -56,7 +56,7 @@ namespace CppSharp.Tests
                         select macro.Name).ToList();
             var enumTest = ctx.GenerateEnumFromMacros("MyMacroTestEnum", list.ToArray());
 
-            var enumTest2 = ctx.GenerateEnumFromMacros("MyMacroTest2Enum", "MY_MACRO_TEST2_*");
+            ctx.GenerateEnumFromMacros("MyMacroTest2Enum", "MY_MACRO_TEST2_.*");
 
             enumTest.Namespace = new Namespace()
                 {
@@ -95,6 +95,24 @@ namespace CppSharp.Tests
     }
 
     #region Type Maps
+    [TypeMap("boolean_t")]
+    public class BooleanTypeMap : TypeMap
+    {
+        public override Type CSharpSignatureType(TypePrinterContext ctx)
+        {
+            return new BuiltinType(PrimitiveType.Bool);
+        }
+
+        public override void CSharpMarshalToNative(CSharpMarshalContext ctx)
+        {
+            ctx.Return.Write(ctx.Parameter.Name);
+        }
+
+        public override void CSharpMarshalToManaged(CSharpMarshalContext ctx)
+        {
+            ctx.Return.Write(ctx.ReturnVarName);
+        }
+    }
 
     [TypeMap("QFlags")]
     public class QFlags : TypeMap
@@ -130,6 +148,8 @@ namespace CppSharp.Tests
                 ctx.Return.Write(ctx.ReturnVarName);
             }
         }
+
+        public override bool IsIgnored => Type.IsDependent;
 
         private static Type GetEnumType(Type mappedType)
         {
@@ -248,12 +268,19 @@ namespace CppSharp.Tests
     {
         public override Type CSharpSignatureType(TypePrinterContext ctx)
         {
+            if (ctx.Kind == TypePrinterContextKind.Native)
+            {
+                return new CustomType($@"global::CSharp.QString.{
+                    Helpers.InternalStruct}{
+                    (ctx.Type.IsAddress() ? "*" : string.Empty)}");
+            }
             return new CILType(typeof(string));
         }
 
         public override void CSharpMarshalToNative(CSharpMarshalContext ctx)
         {
-            ctx.Return.Write("\"test\"");
+            ctx.Return.Write(ctx.Parameter.Type.Desugar().IsAddress() ?
+                "global::System.IntPtr.Zero" : "\"test\"");
         }
 
         public override void CSharpMarshalToManaged(CSharpMarshalContext ctx)

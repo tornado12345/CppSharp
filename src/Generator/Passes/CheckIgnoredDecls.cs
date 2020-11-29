@@ -61,14 +61,11 @@ namespace CppSharp.Passes
 
             Declaration decl = null;
             if (specialization.Arguments.Any(a =>
-                a.Type.Type?.TryGetDeclaration(out decl) == true))
+                a.Type.Type?.TryGetDeclaration(out decl) == true) &&
+                decl.Ignore)
             {
-                decl.Visit(this);
-                if (decl.Ignore)
-                {
-                    specialization.ExplicitlyIgnore();
-                    return false;
-                }
+                specialization.ExplicitlyIgnore();
+                return false;
             }
 
             return true;
@@ -79,6 +76,9 @@ namespace CppSharp.Passes
             if (AlreadyVisited(decl))
                 return false;
 
+            if (decl.HasExplicitGenerationKind)
+                return true;
+
             if (decl.GenerationKind == GenerationKind.None)
                 return true;
 
@@ -88,12 +88,18 @@ namespace CppSharp.Passes
                 return true;
             }
 
+            if (decl.IsDeprecated && !Options.GenerateDeprecatedDeclarations)
+            {
+                Diagnostics.Debug("Decl '{0}' was ignored due to being deprecated", decl.Name);
+                decl.ExplicitlyIgnore();
+                return true;
+            }
+
             if (!CheckDeclarationAccess(decl))
             {
                 Diagnostics.Debug("Decl '{0}' was ignored due to invalid access",
                     decl.Name);
                 decl.GenerationKind = decl is Field ? GenerationKind.Internal : GenerationKind.None;
-                return true;
             }
 
             return true;
@@ -104,13 +110,13 @@ namespace CppSharp.Passes
             if (!VisitDeclaration(field))
                 return false;
 
-            var type = (field.Type.GetFinalPointee() ?? field.Type).Desugar();
+            var type = (field.Type.Desugar().GetFinalPointee() ?? field.Type).Desugar();
 
             Declaration decl;
             type.TryGetDeclaration(out decl);
             string msg = "internal";
             TypeMap typeMap;
-            if (!(type is FunctionType) && (decl == null ||
+            if ((decl == null ||
                 ((decl.GenerationKind != GenerationKind.Internal ||
                   Context.TypeMaps.FindTypeMap(type, out typeMap)) &&
                  !HasInvalidType(field, out msg))))
@@ -120,7 +126,7 @@ namespace CppSharp.Passes
 
             var @class = (Class)field.Namespace;
 
-            var cppTypePrinter = new CppTypePrinter();
+            var cppTypePrinter = new CppTypePrinter(Context);
             var typeName = field.Type.Visit(cppTypePrinter);
 
             Diagnostics.Debug("Field '{0}::{1}' was ignored due to {2} type '{3}'",
@@ -229,7 +235,46 @@ namespace CppSharp.Passes
                 return true;
             }
 
+            if (method.IsCopyConstructor)
+            {
+                if (!CheckNonDeletedCopyConstructor(method))
+                    return false;
+            }
+
             return base.VisitMethodDecl(method);
+        }
+
+        private static bool CheckNonDeletedCopyConstructor(Method method)
+        {
+            if (method.IsDeleted)
+            {
+                method.ExplicitlyIgnore();
+
+                Diagnostics.Debug(
+                    "Copy constructor '{0}' was ignored due to being deleted",
+                    method.QualifiedOriginalName);
+
+                return false;
+            }
+
+            //Check if base class has an implicitly deleted copy constructor
+            var baseClass = (method.Namespace as Class).Bases.FirstOrDefault()?.Class;
+            if (baseClass != null)
+            {
+                var baseCopyCtor = baseClass.Methods.Find(m => m.IsCopyConstructor);
+                if (baseCopyCtor == null || baseCopyCtor.IsDeleted)
+                {
+                    method.ExplicitlyIgnore();
+
+                    Diagnostics.Debug(
+                        "Copy constructor '{0}' was ignored due to implicitly deleted base copy constructor '{1}'",
+                        method.QualifiedOriginalName, baseClass.Name);
+
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         bool CheckIgnoredBaseOverridenMethod(Method method)
@@ -267,7 +312,7 @@ namespace CppSharp.Passes
                     continue;
 
                 ignoredBase = @base;
-                isIgnored |= !@base.IsDeclared
+                isIgnored |= !@base.IsGenerated
                     || HasIgnoredBaseClass(@override, @base, out ignoredBase);
 
                 if (isIgnored)
@@ -335,8 +380,6 @@ namespace CppSharp.Passes
                 return false;
             }
 
-            if (HasInvalidType(variable.Type, variable, out msg))
-
             if (HasInvalidType(variable, out msg))
             {
                 variable.ExplicitlyIgnore();
@@ -371,8 +414,6 @@ namespace CppSharp.Passes
                         @event.Name, msg);
                     return false;
                 }
-
-                if (HasInvalidType(param.Type, param, out msg))
 
                 if (HasInvalidType(param, out msg))
                 {
@@ -496,11 +537,19 @@ namespace CppSharp.Passes
             Declaration decl;
             if (!finalType.TryGetDeclaration(out decl)) return true;
 
+            var isCompleteDecl = !decl.IsIncomplete || decl.CompleteDeclaration != null;
             var @class = (decl as Class);
-            if (@class != null && @class.IsOpaque && !@class.IsDependent && 
-                !(@class is ClassTemplateSpecialization))
-                return true;
-            return !decl.IsIncomplete || decl.CompleteDeclaration != null;
+            if (@class != null && @class.IsOpaque)
+            {
+                var isPointerType = type.Desugar().IsPointer();
+                if (!isPointerType)
+                    return isCompleteDecl;
+
+                if (!@class.IsDependent && !(@class is ClassTemplateSpecialization))
+                    return true;
+            }
+
+            return isCompleteDecl;
         }
 
         private bool IsTypeIgnored(Type type)

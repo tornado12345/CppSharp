@@ -11,6 +11,9 @@
 #include "Helpers.h"
 #include "Target.h"
 
+#define CS_INTERNAL
+#define CS_READONLY
+
 namespace CppSharp { namespace CppParser {
 
 using namespace CppSharp::CppParser::AST;
@@ -20,8 +23,9 @@ struct CS_API CppParserOptions
     CppParserOptions();
     ~CppParserOptions();
 
+    std::string getClangVersion();
+
     VECTOR_STRING(Arguments)
-    std::string libraryFile;
     // C/C++ header file names.
     VECTOR_STRING(SourceFiles)
 
@@ -30,15 +34,12 @@ struct CS_API CppParserOptions
     VECTOR_STRING(SystemIncludeDirs)
     VECTOR_STRING(Defines)
     VECTOR_STRING(Undefines)
-    VECTOR_STRING(LibraryDirs)
     VECTOR_STRING(SupportedStdTypes)
 
     CppSharp::CppParser::AST::ASTContext* ASTContext;
 
     int toolSetToUse;
     std::string targetTriple;
-    std::string currentDir;
-    CppAbi abi;
 
     bool noStandardIncludes;
     bool noBuiltinIncludes;
@@ -48,6 +49,19 @@ struct CS_API CppParserOptions
     bool skipPrivateDeclarations;
     bool skipLayoutInfo;
     bool skipFunctionBodies;
+
+private:
+    std::string clangVersion;
+};
+
+struct CS_API LinkerOptions
+{
+    LinkerOptions();
+    ~LinkerOptions();
+
+    VECTOR_STRING(Arguments)
+    VECTOR_STRING(LibraryDirs)
+    VECTOR_STRING(Libraries)
 };
 
 enum class ParserDiagnosticLevel
@@ -87,10 +101,8 @@ struct CS_API ParserResult
 
     ParserResultKind kind;
     VECTOR(ParserDiagnostic, Diagnostics)
-
-    NativeLibrary* library;
+    VECTOR(NativeLibrary*, Libraries)
     ParserTargetInfo* targetInfo;
-    Parser* codeParser;
 };
 
 enum class SourceLocationKind
@@ -107,7 +119,7 @@ class CS_API ClangParser
 public:
 
     static ParserResult* ParseHeader(CppParserOptions* Opts);
-    static ParserResult* ParseLibrary(CppParserOptions* Opts);
+    static ParserResult* ParseLibrary(LinkerOptions* Opts);
 };
 
 } }

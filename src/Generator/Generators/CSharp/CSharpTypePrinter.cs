@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
+using CppSharp.Extensions;
 using CppSharp.Types;
 using ParserTargetInfo = CppSharp.Parser.ParserTargetInfo;
 using Type = CppSharp.AST.Type;
@@ -13,7 +14,7 @@ namespace CppSharp.Generators.CSharp
 {
     public class CSharpTypePrinter : TypePrinter
     {
-        public string IntPtrType => QualifiedType("System.IntPtr");
+        public string IntPtrType => "__IntPtr";
 
         public BindingContext Context { get; set; }
 
@@ -87,24 +88,14 @@ namespace CppSharp.Generators.CSharp
                 Enumeration @enum;
                 if (arrayType.TryGetEnum(out @enum))
                 {
-                    return new TypePrinterResult
-                    {
-                        Type = $"fixed {@enum.BuiltinType}",
-                        NameSuffix = $"[{array.Size}]"
-                    };
+                    return new TypePrinterResult($"fixed {@enum.BuiltinType}",
+                        $"[{array.Size}]");
                 }
 
-                Class @class;
-                if (arrayType.TryGetClass(out @class))
-                {
-                    return new TypePrinterResult
-                    {
-                        Type = "fixed byte",
-                        NameSuffix = $"[{array.Size * @class.Layout.Size}]"
-                    };
-                }
+                if (arrayType.IsClass())
+                    return new TypePrinterResult($"fixed byte", $"[{array.GetSizeInBytes()}]");
 
-                var arrayElemType = array.QualifiedType.Visit(this).ToString();
+                TypePrinterResult arrayElemType = array.QualifiedType.Visit(this);
 
                 // C# does not support fixed arrays of machine pointer type (void* or IntPtr).
                 // In that case, replace it by a pointer to an integer type of the same size.
@@ -113,11 +104,8 @@ namespace CppSharp.Generators.CSharp
 
                 // Do not write the fixed keyword multiple times for nested array types
                 var fixedKeyword = arrayType is ArrayType ? string.Empty : "fixed ";
-                return new TypePrinterResult
-                {
-                    Type = $"{fixedKeyword}{arrayElemType}",
-                    NameSuffix = $"[{array.Size}]"
-                };
+                return new TypePrinterResult(fixedKeyword + arrayElemType.Type,
+                    $"[{array.Size}]");
             }
 
             // const char* and const char[] are the same so we can use a string
@@ -129,7 +117,7 @@ namespace CppSharp.Generators.CSharp
             if (arrayType.IsPointerToPrimitiveType(PrimitiveType.Char))
             {
                 var prefix = ContextKind == TypePrinterContextKind.Managed ? string.Empty :
-                    "[MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPStr)] ";
+                    "[MarshalAs(UnmanagedType.LPArray)] ";
                 return $"{prefix}string[]";
             }
 
@@ -157,41 +145,8 @@ namespace CppSharp.Generators.CSharp
             return base.VisitBuiltinType(builtin, quals);
         }
 
-        public override TypePrinterResult VisitFunctionType(FunctionType function,
-            TypeQualifiers quals)
-        {
-            var arguments = function.Parameters;
-            var returnType = function.ReturnType;
-            var args = string.Empty;
-
-            PushMarshalKind(MarshalKind.GenericDelegate);
-
-            if (arguments.Count > 0)
-                args = VisitParameters(function.Parameters, hasNames: false).Type;
-
-            PopMarshalKind();
-
-            if (ContextKind != TypePrinterContextKind.Managed)
-                return IntPtrType;
-
-            if (returnType.Type.IsPrimitiveType(PrimitiveType.Void))
-            {
-                if (!string.IsNullOrEmpty(args))
-                    args = string.Format("<{0}>", args);
-                return string.Format("Action{0}", args);
-            }
-
-            if (!string.IsNullOrEmpty(args))
-                args = string.Format(", {0}", args);
-
-            PushMarshalKind(MarshalKind.GenericDelegate);
-
-            var returnTypePrinterResult = returnType.Visit(this);
-
-            PopMarshalKind();
-
-            return string.Format("Func<{0}{1}>", returnTypePrinterResult, args);
-        }
+        public override TypePrinterResult VisitFunctionType(FunctionType function, TypeQualifiers quals)
+            => IntPtrType;
 
         private bool allowStrings = true;
 
@@ -234,7 +189,8 @@ namespace CppSharp.Generators.CSharp
             // * Any pointer type.
             // * Any user-defined struct type that contains fields of unmanaged types only.
             var finalPointee = (pointee.GetFinalPointee() ?? pointee).Desugar();
-            if (finalPointee.IsPrimitiveType())
+            Enumeration @enum;
+            if (finalPointee.IsPrimitiveType() || finalPointee.TryGetEnum(out @enum))
             {
                 // Skip one indirection if passed by reference
                 bool isRefParam = Parameter != null && (Parameter.IsOut || Parameter.IsInOut);
@@ -253,18 +209,8 @@ namespace CppSharp.Generators.CSharp
                 var result = pointer.QualifiedPointee.Visit(this);
                 allowStrings = true;
 
-                return !isRefParam && result.Type == IntPtrType ? "void**" : result + "*";
-            }
-
-            Enumeration @enum;
-            if (pointee.TryGetEnum(out @enum))
-            {
-                // Skip one indirection if passed by reference
-                if (isManagedContext && Parameter != null && (Parameter.IsOut || Parameter.IsInOut)
-                    && pointee == finalPointee)
-                    return pointer.QualifiedPointee.Visit(this);
-
-                return pointer.QualifiedPointee.Visit(this) + "*";
+                string @ref = Parameter != null && Parameter.IsIndirect ? string.Empty : "*";
+                return !isRefParam && result.Type == this.IntPtrType ? "void**" : result + @ref;
             }
 
             Class @class;
@@ -295,7 +241,7 @@ namespace CppSharp.Generators.CSharp
             var decl = typedef.Declaration;
 
             TypeMap typeMap;
-            if (TypeMapDatabase.FindTypeMap(decl.Type, out typeMap))
+            if (TypeMapDatabase.FindTypeMap(typedef, out typeMap))
             {
                 typeMap.Type = typedef;
 
@@ -303,13 +249,21 @@ namespace CppSharp.Generators.CSharp
                 {
                     Kind = ContextKind,
                     MarshalKind = MarshalKind,
-                    Type = typedef
+                    Type = typedef,
+                    Parameter = Parameter
                 };
 
                 return typeMap.CSharpSignatureType(typePrinterContext).ToString();
             }
 
-            FunctionType func = decl.Type as FunctionType;
+            FunctionType func;
+            if (decl.Type.IsPointerTo(out func))
+            {
+                if (MarshalKind == MarshalKind.GenericDelegate && ContextKind == TypePrinterContextKind.Native)
+                    return VisitDeclaration(decl);
+            }
+
+            func = decl.Type as FunctionType;
             if (func != null || decl.Type.IsPointerTo(out func))
             {
                 if (ContextKind == TypePrinterContextKind.Native)
@@ -337,9 +291,11 @@ namespace CppSharp.Generators.CSharp
                     List<TemplateArgument> args = template.Arguments;
                     var @class = (Class) template.Template.TemplatedDecl;
                     TemplateArgument lastArg = args.Last();
-                    return $@"{VisitDeclaration(decl)}<{string.Join(", ",
+                    TypePrinterResult typePrinterResult = VisitDeclaration(decl);
+                    typePrinterResult.NameSuffix.Append($@"<{string.Join(", ",
                        args.Concat(Enumerable.Range(0, @class.TemplateParameters.Count - args.Count).Select(
-                           i => lastArg)).Select(this.VisitTemplateArgument))}>";
+                           i => lastArg)).Select(this.VisitTemplateArgument))}>");
+                    return typePrinterResult;
                 }
 
                 if (ContextKind == TypePrinterContextKind.Native)
@@ -440,54 +396,9 @@ namespace CppSharp.Generators.CSharp
             return QualifiedType(type.Type.FullName);
         }
 
-        public static void GetPrimitiveTypeWidth(PrimitiveType primitive,
-            ParserTargetInfo targetInfo, out uint width, out bool signed)
+        public static void GetPrimitiveTypeWidth(PrimitiveType primitive, ParserTargetInfo targetInfo, out uint width, out bool signed)
         {
-            switch (primitive)
-            {
-                case PrimitiveType.Char:
-                    width = targetInfo?.CharWidth ?? 8;
-                    signed = true;
-                    break;
-                case PrimitiveType.UChar:
-                    width = targetInfo?.CharWidth ?? 8;
-                    signed = false;
-                    break;
-                case PrimitiveType.Short:
-                    width = targetInfo?.ShortWidth ?? 16;
-                    signed = true;
-                    break;
-                case PrimitiveType.UShort:
-                    width = targetInfo?.ShortWidth ?? 16;
-                    signed = false;
-                    break;
-                case PrimitiveType.Int:
-                    width = targetInfo?.IntWidth ?? 32;
-                    signed = true;
-                    break;
-                case PrimitiveType.UInt:
-                    width = targetInfo?.IntWidth ?? 32;
-                    signed = false;
-                    break;
-                case PrimitiveType.Long:
-                    width = targetInfo?.LongWidth ?? 32;
-                    signed = true;
-                    break;
-                case PrimitiveType.ULong:
-                    width = targetInfo?.LongWidth ?? 32;
-                    signed = false;
-                    break;
-                case PrimitiveType.LongLong:
-                    width = targetInfo?.LongLongWidth ?? 64;
-                    signed = true;
-                    break;
-                case PrimitiveType.ULongLong:
-                    width = targetInfo?.LongLongWidth ?? 64;
-                    signed = false;
-                    break;
-                default:
-                    throw new NotImplementedException();
-            }
+            width = primitive.GetInfo(targetInfo, out signed).Width;
         }
 
         static string GetIntString(PrimitiveType primitive, ParserTargetInfo targetInfo)
@@ -542,16 +453,16 @@ namespace CppSharp.Generators.CSharp
                 case PrimitiveType.LongLong:
                 case PrimitiveType.ULongLong:
                     return GetIntString(primitive, Context.TargetInfo);
-                case PrimitiveType.Int128: return new TypePrinterResult { Type = "fixed byte",
-                    NameSuffix = "[16]"}; // The type is always 128 bits wide
-                case PrimitiveType.UInt128: return new TypePrinterResult { Type = "fixed byte",
-                    NameSuffix = "[16]"}; // The type is always 128 bits wide
-                case PrimitiveType.Half: return new TypePrinterResult { Type = "fixed byte",
-                    NameSuffix = $"[{Context.TargetInfo.HalfWidth}]"};
+                case PrimitiveType.Int128: return new TypePrinterResult("fixed byte",
+                    "[16]"); // The type is always 128 bits wide
+                case PrimitiveType.UInt128: return new TypePrinterResult("fixed byte",
+                    "[16]"); // The type is always 128 bits wide
+                case PrimitiveType.Half: return new TypePrinterResult("fixed byte",
+                    $"[{Context.TargetInfo.HalfWidth}]");
                 case PrimitiveType.Float: return "float";
                 case PrimitiveType.Double: return "double";
-                case PrimitiveType.LongDouble: return new TypePrinterResult { Type = "fixed byte",
-                    NameSuffix = $"[{Context.TargetInfo.LongDoubleWidth}]"};
+                case PrimitiveType.LongDouble: return new TypePrinterResult("fixed byte",
+                    $"[{Context.TargetInfo.LongDoubleWidth}]");
                 case PrimitiveType.IntPtr: return IntPtrType;
                 case PrimitiveType.UIntPtr: return QualifiedType("System.UIntPtr");
                 case PrimitiveType.Null: return "void*";
@@ -573,29 +484,36 @@ namespace CppSharp.Generators.CSharp
                 return $@"{VisitDeclaration(@class.OriginalClass ?? @class)}.{
                     Helpers.InternalStruct}{Helpers.GetSuffixForInternal(@class)}";
 
-            var printed = VisitDeclaration(@class).Type;
-            if (!@class.IsTemplate)
-                return printed;
-            return $@"{printed}<{string.Join(", ",
-                @class.TemplateParameters.Select(p => p.Name))}>";
+            TypePrinterResult printed = VisitDeclaration(@class);
+            if (@class.IsTemplate)
+                printed.NameSuffix.Append($@"<{string.Join(", ",
+                    @class.TemplateParameters.Select(p => p.Name))}>");
+            return printed;
         }
 
         public override TypePrinterResult VisitClassTemplateSpecializationDecl(
             ClassTemplateSpecialization specialization)
         {
-            if (ContextKind == TypePrinterContextKind.Native)
-                return $"{VisitClassDecl(specialization)}";
-            var args = string.Join(", ", specialization.Arguments.Select(VisitTemplateArgument));
-            return $"{VisitClassDecl(specialization)}<{args}>";
+            TypePrinterResult typePrinterResult = VisitClassDecl(specialization);
+            if (ContextKind != TypePrinterContextKind.Native)
+                typePrinterResult.NameSuffix.Append($@"<{string.Join(", ",
+                    specialization.Arguments.Select(VisitTemplateArgument))}>");
+            return typePrinterResult;
         }
 
         public TypePrinterResult VisitTemplateArgument(TemplateArgument a)
         {
             if (a.Type.Type == null)
                 return a.Integral.ToString(CultureInfo.InvariantCulture);
-            var type = a.Type.Type.Desugar();
-            return type.IsPointerToPrimitiveType() ? IntPtrType :
-                type.IsPrimitiveType(PrimitiveType.Void) ? "object" : type.Visit(this).Type;
+            var type = a.Type.Type;
+            PrimitiveType pointee;
+            if (type.IsPointerToPrimitiveType(out pointee) && !type.IsConstCharString())
+            {
+                return $@"CppSharp.Runtime.Pointer<{(pointee == PrimitiveType.Void ? IntPtrType :
+                    VisitPrimitiveType(pointee, new TypeQualifiers()).Type)}>";
+            }
+            return type.IsPrimitiveType(PrimitiveType.Void) ?
+                new TypePrinterResult("object") : type.Visit(this);
         }
 
         public override TypePrinterResult VisitParameterDecl(Parameter parameter)
@@ -759,23 +677,14 @@ namespace CppSharp.Generators.CSharp
 
         public override TypePrinterResult VisitFieldDecl(Field field)
         {
-            var cSharpSourcesDummy = new CSharpSources(Context, new List<TranslationUnit>());
-            var safeIdentifier = cSharpSourcesDummy.SafeIdentifier(field.Name);
-
-            if (safeIdentifier.All(c => c.Equals('_')))
-            {
-                safeIdentifier = cSharpSourcesDummy.SafeIdentifier(field.Name);
-            }
-
-            PushMarshalKind(MarshalKind.NativeField);   
+            PushMarshalKind(MarshalKind.NativeField);
             var fieldTypePrinted = field.QualifiedType.Visit(this);
             PopMarshalKind();
-                     
-            var returnTypePrinter = new TypePrinterResult();
-            if (!string.IsNullOrWhiteSpace(fieldTypePrinted.NameSuffix))
-                returnTypePrinter.NameSuffix = fieldTypePrinted.NameSuffix;
 
-            returnTypePrinter.Type = $"{fieldTypePrinted.Type} {safeIdentifier}"; 
+            var returnTypePrinter = new TypePrinterResult();
+            returnTypePrinter.NameSuffix.Append(fieldTypePrinted.NameSuffix);
+
+            returnTypePrinter.Type = $"{fieldTypePrinted.Type} {field.Name}"; 
 
             return returnTypePrinter;
         }

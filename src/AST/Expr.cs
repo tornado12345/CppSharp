@@ -224,7 +224,7 @@ namespace CppSharp.AST
         PreferredAlignOf = 4
     }
 
-    public partial class Expr : Stmt
+    public abstract partial class Expr : Stmt
     {
         public enum LValueClassification
         {
@@ -383,7 +383,7 @@ namespace CppSharp.AST
         public bool HasPlaceholderType { get; set; }
     }
 
-    public partial class FullExpr : Expr
+    public abstract partial class FullExpr : Expr
     {
         public FullExpr()
         {
@@ -398,6 +398,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitConstantExpr(this);
     }
 
     public partial class OpaqueValueExpr : Expr
@@ -409,6 +412,9 @@ namespace CppSharp.AST
         public bool IsUnique { get; set; }
         public SourceLocation Location { get; set; }
         public Expr SourceExpr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitOpaqueValueExpr(this);
     }
 
     public partial class DeclRefExpr : Expr
@@ -429,6 +435,9 @@ namespace CppSharp.AST
         public bool HasExplicitTemplateArgs { get; set; }
         public uint NumTemplateArgs { get; set; }
         public bool RefersToEnclosingVariableOrCapture { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitDeclRefExpr(this);
     }
 
     public partial class IntegerLiteral : Expr
@@ -439,6 +448,9 @@ namespace CppSharp.AST
 
         public SourceLocation Location { get; set; }
         public ulong Value { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitIntegerLiteral(this);
     }
 
     public partial class FixedPointLiteral : Expr
@@ -449,6 +461,9 @@ namespace CppSharp.AST
 
         public SourceLocation Location { get; set; }
         public ulong Value { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitFixedPointLiteral(this);
     }
 
     public partial class CharacterLiteral : Expr
@@ -469,6 +484,9 @@ namespace CppSharp.AST
         public SourceLocation Location { get; set; }
         public CharacterLiteral.CharacterKind Kind { get; set; }
         public uint Value { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCharacterLiteral(this);
     }
 
     public partial class FloatingLiteral : Expr
@@ -480,6 +498,9 @@ namespace CppSharp.AST
         public bool Exact { get; set; }
         public SourceLocation Location { get; set; }
         public double ValueAsApproximateDouble { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitFloatingLiteral(this);
     }
 
     public partial class ImaginaryLiteral : Expr
@@ -489,6 +510,9 @@ namespace CppSharp.AST
         }
 
         public Expr SubExpr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitImaginaryLiteral(this);
     }
 
     public partial class StringLiteral : Expr
@@ -521,6 +545,9 @@ namespace CppSharp.AST
         public bool ContainsNonAscii { get; set; }
         public bool ContainsNonAsciiOrNull { get; set; }
         public uint NumConcatenated { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitStringLiteral(this);
     }
 
     public partial class PredefinedExpr : Expr
@@ -547,6 +574,9 @@ namespace CppSharp.AST
 
         public SourceLocation Location { get; set; }
         public PredefinedExpr.IdentKind identKind { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitPredefinedExpr(this);
     }
 
     public partial class ParenExpr : Expr
@@ -558,6 +588,9 @@ namespace CppSharp.AST
         public Expr SubExpr { get; set; }
         public SourceLocation LParen { get; set; }
         public SourceLocation RParen { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitParenExpr(this);
     }
 
     public partial class UnaryOperator : Expr
@@ -576,6 +609,10 @@ namespace CppSharp.AST
         public bool IsDecrementOp { get; set; }
         public bool IsIncrementDecrementOp { get; set; }
         public bool IsArithmeticOp { get; set; }
+        public bool IsFPContractableWithinStatement { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitUnaryOperator(this);
     }
 
     public partial class OffsetOfExpr : Expr
@@ -588,6 +625,9 @@ namespace CppSharp.AST
         public SourceLocation RParenLoc { get; set; }
         public uint NumComponents { get; set; }
         public uint NumExpressions { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitOffsetOfExpr(this);
     }
 
     public partial class UnaryExprOrTypeTraitExpr : Expr
@@ -603,6 +643,9 @@ namespace CppSharp.AST
         public QualifiedType ArgumentType { get; set; }
         public Expr ArgumentExpr { get; set; }
         public QualifiedType TypeOfArgument { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitUnaryExprOrTypeTraitExpr(this);
     }
 
     public partial class ArraySubscriptExpr : Expr
@@ -616,6 +659,9 @@ namespace CppSharp.AST
         public SourceLocation RBracketLoc { get; set; }
         public Expr Base { get; set; }
         public Expr Idx { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitArraySubscriptExpr(this);
     }
 
     public partial class CallExpr : Expr
@@ -633,6 +679,9 @@ namespace CppSharp.AST
         public uint NumCommas { get; set; }
         public uint BuiltinCallee { get; set; }
         public bool IsCallToStdMove { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCallExpr(this);
     }
 
     public partial class MemberExpr : Expr
@@ -654,6 +703,9 @@ namespace CppSharp.AST
         public uint NumTemplateArgs { get; set; }
         public SourceLocation OperatorLoc { get; set; }
         public bool IsImplicitAccess { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitMemberExpr(this);
     }
 
     public partial class CompoundLiteralExpr : Expr
@@ -665,9 +717,12 @@ namespace CppSharp.AST
         public Expr Initializer { get; set; }
         public bool FileScope { get; set; }
         public SourceLocation LParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCompoundLiteralExpr(this);
     }
 
-    public partial class CastExpr : Expr
+    public abstract partial class CastExpr : Expr
     {
         public CastExpr()
         {
@@ -694,9 +749,12 @@ namespace CppSharp.AST
         }
 
         public bool IsPartOfExplicitCast { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitImplicitCastExpr(this);
     }
 
-    public partial class ExplicitCastExpr : CastExpr
+    public abstract partial class ExplicitCastExpr : CastExpr
     {
         public ExplicitCastExpr()
         {
@@ -713,6 +771,9 @@ namespace CppSharp.AST
 
         public SourceLocation LParenLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCStyleCastExpr(this);
     }
 
     public partial class BinaryOperator : Expr
@@ -740,6 +801,9 @@ namespace CppSharp.AST
         public bool IsShiftAssignOp { get; set; }
         public bool IsFPContractableWithinStatement { get; set; }
         public bool IsFEnvAccessOn { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitBinaryOperator(this);
     }
 
     public partial class CompoundAssignOperator : BinaryOperator
@@ -750,9 +814,12 @@ namespace CppSharp.AST
 
         public QualifiedType ComputationLHSType { get; set; }
         public QualifiedType ComputationResultType { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCompoundAssignOperator(this);
     }
 
-    public partial class AbstractConditionalOperator : Expr
+    public abstract partial class AbstractConditionalOperator : Expr
     {
         public AbstractConditionalOperator()
         {
@@ -773,6 +840,9 @@ namespace CppSharp.AST
 
         public Expr LHS { get; set; }
         public Expr RHS { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitConditionalOperator(this);
     }
 
     public partial class BinaryConditionalOperator : AbstractConditionalOperator
@@ -783,6 +853,9 @@ namespace CppSharp.AST
 
         public Expr Common { get; set; }
         public OpaqueValueExpr OpaqueValue { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitBinaryConditionalOperator(this);
     }
 
     public partial class AddrLabelExpr : Expr
@@ -793,6 +866,9 @@ namespace CppSharp.AST
 
         public SourceLocation AmpAmpLoc { get; set; }
         public SourceLocation LabelLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitAddrLabelExpr(this);
     }
 
     public partial class StmtExpr : Expr
@@ -804,6 +880,9 @@ namespace CppSharp.AST
         public CompoundStmt SubStmt { get; set; }
         public SourceLocation LParenLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitStmtExpr(this);
     }
 
     public partial class ShuffleVectorExpr : Expr
@@ -815,6 +894,9 @@ namespace CppSharp.AST
         public SourceLocation BuiltinLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
         public uint NumSubExprs { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitShuffleVectorExpr(this);
     }
 
     public partial class ConvertVectorExpr : Expr
@@ -826,6 +908,9 @@ namespace CppSharp.AST
         public Expr SrcExpr { get; set; }
         public SourceLocation BuiltinLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitConvertVectorExpr(this);
     }
 
     public partial class ChooseExpr : Expr
@@ -842,6 +927,9 @@ namespace CppSharp.AST
         public SourceLocation RParenLoc { get; set; }
         public bool IsConditionDependent { get; set; }
         public Expr ChosenSubExpr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitChooseExpr(this);
     }
 
     public partial class GNUNullExpr : Expr
@@ -851,6 +939,9 @@ namespace CppSharp.AST
         }
 
         public SourceLocation TokenLocation { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitGNUNullExpr(this);
     }
 
     public partial class VAArgExpr : Expr
@@ -863,6 +954,9 @@ namespace CppSharp.AST
         public bool IsMicrosoftABI { get; set; }
         public SourceLocation BuiltinLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitVAArgExpr(this);
     }
 
     public partial class InitListExpr : Expr
@@ -883,6 +977,9 @@ namespace CppSharp.AST
         public bool IsSemanticForm { get; set; }
         public InitListExpr SemanticForm { get; set; }
         public bool IsSyntacticForm { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitInitListExpr(this);
     }
 
     public partial class DesignatedInitExpr : Expr
@@ -930,6 +1027,9 @@ namespace CppSharp.AST
         public bool UsesGNUSyntax { get; set; }
         public uint NumSubExprs { get; set; }
         public SourceRange DesignatorsSourceRange { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitDesignatedInitExpr(this);
     }
 
     public partial class NoInitExpr : Expr
@@ -938,6 +1038,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitNoInitExpr(this);
     }
 
     public partial class DesignatedInitUpdateExpr : Expr
@@ -948,6 +1051,9 @@ namespace CppSharp.AST
 
         public Expr Base { get; set; }
         public InitListExpr Updater { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitDesignatedInitUpdateExpr(this);
     }
 
     public partial class ArrayInitLoopExpr : Expr
@@ -958,6 +1064,9 @@ namespace CppSharp.AST
 
         public OpaqueValueExpr CommonExpr { get; set; }
         public Expr SubExpr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitArrayInitLoopExpr(this);
     }
 
     public partial class ArrayInitIndexExpr : Expr
@@ -966,6 +1075,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitArrayInitIndexExpr(this);
     }
 
     public partial class ImplicitValueInitExpr : Expr
@@ -974,6 +1086,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitImplicitValueInitExpr(this);
     }
 
     public partial class ParenListExpr : Expr
@@ -985,6 +1100,9 @@ namespace CppSharp.AST
         public uint NumExprs { get; set; }
         public SourceLocation LParenLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitParenListExpr(this);
     }
 
     public partial class GenericSelectionExpr : Expr
@@ -1001,6 +1119,9 @@ namespace CppSharp.AST
         public bool IsResultDependent { get; set; }
         public uint ResultIndex { get; set; }
         public Expr ResultExpr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitGenericSelectionExpr(this);
     }
 
     public partial class ExtVectorElementExpr : Expr
@@ -1014,6 +1135,9 @@ namespace CppSharp.AST
         public uint NumElements { get; set; }
         public bool ContainsDuplicateElements { get; set; }
         public bool IsArrow { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitExtVectorElementExpr(this);
     }
 
     public partial class BlockExpr : Expr
@@ -1024,6 +1148,9 @@ namespace CppSharp.AST
 
         public SourceLocation CaretLocation { get; set; }
         public Stmt Body { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitBlockExpr(this);
     }
 
     public partial class AsTypeExpr : Expr
@@ -1035,6 +1162,9 @@ namespace CppSharp.AST
         public Expr SrcExpr { get; set; }
         public SourceLocation BuiltinLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitAsTypeExpr(this);
     }
 
     public partial class PseudoObjectExpr : Expr
@@ -1047,6 +1177,9 @@ namespace CppSharp.AST
         public uint ResultExprIndex { get; set; }
         public Expr ResultExpr { get; set; }
         public uint NumSemanticExprs { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitPseudoObjectExpr(this);
     }
 
     public partial class AtomicExpr : Expr
@@ -1120,6 +1253,9 @@ namespace CppSharp.AST
         public bool IsOpenCL { get; set; }
         public SourceLocation BuiltinLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitAtomicExpr(this);
     }
 
     public partial class TypoExpr : Expr
@@ -1128,6 +1264,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitTypoExpr(this);
     }
 
     public partial class CXXOperatorCallExpr : CallExpr
@@ -1141,6 +1280,9 @@ namespace CppSharp.AST
         public bool IsInfixBinaryOp { get; set; }
         public SourceLocation OperatorLoc { get; set; }
         public bool IsFPContractableWithinStatement { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXOperatorCallExpr(this);
     }
 
     public partial class CXXMemberCallExpr : CallExpr
@@ -1151,6 +1293,9 @@ namespace CppSharp.AST
 
         public Expr ImplicitObjectArgument { get; set; }
         public Method MethodDecl { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXMemberCallExpr(this);
     }
 
     public partial class CUDAKernelCallExpr : CallExpr
@@ -1160,9 +1305,12 @@ namespace CppSharp.AST
         }
 
         public CallExpr Config { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCUDAKernelCallExpr(this);
     }
 
-    public partial class CXXNamedCastExpr : ExplicitCastExpr
+    public abstract partial class CXXNamedCastExpr : ExplicitCastExpr
     {
         public CXXNamedCastExpr()
         {
@@ -1180,6 +1328,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXStaticCastExpr(this);
     }
 
     public partial class CXXDynamicCastExpr : CXXNamedCastExpr
@@ -1189,6 +1340,9 @@ namespace CppSharp.AST
         }
 
         public bool IsAlwaysNull { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXDynamicCastExpr(this);
     }
 
     public partial class CXXReinterpretCastExpr : CXXNamedCastExpr
@@ -1197,6 +1351,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXReinterpretCastExpr(this);
     }
 
     public partial class CXXConstCastExpr : CXXNamedCastExpr
@@ -1205,6 +1362,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXConstCastExpr(this);
     }
 
     public partial class UserDefinedLiteral : CallExpr
@@ -1232,6 +1392,9 @@ namespace CppSharp.AST
         public UserDefinedLiteral.LiteralOperatorKind literalOperatorKind { get; set; }
         public Expr CookedLiteral { get; set; }
         public SourceLocation UDSuffixLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitUserDefinedLiteral(this);
     }
 
     public partial class CXXBoolLiteralExpr : Expr
@@ -1242,6 +1405,9 @@ namespace CppSharp.AST
 
         public bool Value { get; set; }
         public SourceLocation Location { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXBoolLiteralExpr(this);
     }
 
     public partial class CXXNullPtrLiteralExpr : Expr
@@ -1251,6 +1417,9 @@ namespace CppSharp.AST
         }
 
         public SourceLocation Location { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXNullPtrLiteralExpr(this);
     }
 
     public partial class CXXStdInitializerListExpr : Expr
@@ -1260,6 +1429,9 @@ namespace CppSharp.AST
         }
 
         public Expr SubExpr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXStdInitializerListExpr(this);
     }
 
     public partial class CXXTypeidExpr : Expr
@@ -1271,6 +1443,9 @@ namespace CppSharp.AST
         public Expr ExprOperand { get; set; }
         public bool IsPotentiallyEvaluated { get; set; }
         public bool IsTypeOperand { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXTypeidExpr(this);
     }
 
     public partial class MSPropertyRefExpr : Expr
@@ -1283,6 +1458,9 @@ namespace CppSharp.AST
         public Expr BaseExpr { get; set; }
         public bool IsArrow { get; set; }
         public SourceLocation MemberLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitMSPropertyRefExpr(this);
     }
 
     public partial class MSPropertySubscriptExpr : Expr
@@ -1294,6 +1472,9 @@ namespace CppSharp.AST
         public SourceLocation RBracketLoc { get; set; }
         public Expr Base { get; set; }
         public Expr Idx { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitMSPropertySubscriptExpr(this);
     }
 
     public partial class CXXUuidofExpr : Expr
@@ -1305,6 +1486,9 @@ namespace CppSharp.AST
         public Expr ExprOperand { get; set; }
         public string UuidStr { get; set; }
         public bool IsTypeOperand { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXUuidofExpr(this);
     }
 
     public partial class CXXThisExpr : Expr
@@ -1315,6 +1499,9 @@ namespace CppSharp.AST
 
         public SourceLocation Location { get; set; }
         public bool Implicit { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXThisExpr(this);
     }
 
     public partial class CXXThrowExpr : Expr
@@ -1326,6 +1513,9 @@ namespace CppSharp.AST
         public Expr SubExpr { get; set; }
         public SourceLocation ThrowLoc { get; set; }
         public bool IsThrownVariableInScope { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXThrowExpr(this);
     }
 
     public partial class CXXDefaultArgExpr : Expr
@@ -1336,6 +1526,9 @@ namespace CppSharp.AST
 
         public Expr Expr { get; set; }
         public SourceLocation UsedLocation { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXDefaultArgExpr(this);
     }
 
     public partial class CXXDefaultInitExpr : Expr
@@ -1346,6 +1539,9 @@ namespace CppSharp.AST
 
         public Field Field { get; set; }
         public Expr Expr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXDefaultInitExpr(this);
     }
 
     public partial class CXXBindTemporaryExpr : Expr
@@ -1355,6 +1551,9 @@ namespace CppSharp.AST
         }
 
         public Expr SubExpr { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXBindTemporaryExpr(this);
     }
 
     public partial class CXXConstructExpr : Expr
@@ -1380,6 +1579,9 @@ namespace CppSharp.AST
         public bool RequiresZeroInitialization { get; set; }
         public SourceRange ParenOrBraceRange { get; set; }
         public uint NumArgs { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXConstructExpr(this);
     }
 
     public partial class CXXInheritedCtorInitExpr : Expr
@@ -1391,6 +1593,9 @@ namespace CppSharp.AST
         public bool ConstructsVBase { get; set; }
         public bool InheritedFromVBase { get; set; }
         public SourceLocation Location { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXInheritedCtorInitExpr(this);
     }
 
     public partial class CXXFunctionalCastExpr : ExplicitCastExpr
@@ -1402,6 +1607,9 @@ namespace CppSharp.AST
         public SourceLocation LParenLoc { get; set; }
         public SourceLocation RParenLoc { get; set; }
         public bool IsListInitialization { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXFunctionalCastExpr(this);
     }
 
     public partial class CXXTemporaryObjectExpr : CXXConstructExpr
@@ -1410,6 +1618,9 @@ namespace CppSharp.AST
         {
         }
 
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXTemporaryObjectExpr(this);
     }
 
     public partial class LambdaExpr : Expr
@@ -1428,6 +1639,9 @@ namespace CppSharp.AST
         public bool IsMutable { get; set; }
         public bool HasExplicitParameters { get; set; }
         public bool HasExplicitResultType { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitLambdaExpr(this);
     }
 
     public partial class CXXScalarValueInitExpr : Expr
@@ -1437,6 +1651,9 @@ namespace CppSharp.AST
         }
 
         public SourceLocation RParenLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXScalarValueInitExpr(this);
     }
 
     public partial class CXXNewExpr : Expr
@@ -1470,6 +1687,9 @@ namespace CppSharp.AST
         public Expr Initializer { get; set; }
         public CXXConstructExpr ConstructExpr { get; set; }
         public SourceRange DirectInitRange { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXNewExpr(this);
     }
 
     public partial class CXXDeleteExpr : Expr
@@ -1484,6 +1704,9 @@ namespace CppSharp.AST
         public Function OperatorDelete { get; set; }
         public Expr Argument { get; set; }
         public QualifiedType DestroyedType { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXDeleteExpr(this);
     }
 
     public partial class CXXPseudoDestructorExpr : Expr
@@ -1500,6 +1723,9 @@ namespace CppSharp.AST
         public SourceLocation TildeLoc { get; set; }
         public QualifiedType DestroyedType { get; set; }
         public SourceLocation DestroyedTypeLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXPseudoDestructorExpr(this);
     }
 
     public partial class TypeTraitExpr : Expr
@@ -1510,6 +1736,9 @@ namespace CppSharp.AST
 
         public bool Value { get; set; }
         public uint NumArgs { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitTypeTraitExpr(this);
     }
 
     public partial class ArrayTypeTraitExpr : Expr
@@ -1521,6 +1750,9 @@ namespace CppSharp.AST
         public QualifiedType QueriedType { get; set; }
         public ulong Value { get; set; }
         public Expr DimensionExpression { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitArrayTypeTraitExpr(this);
     }
 
     public partial class ExpressionTraitExpr : Expr
@@ -1531,9 +1763,12 @@ namespace CppSharp.AST
 
         public Expr QueriedExpression { get; set; }
         public bool Value { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitExpressionTraitExpr(this);
     }
 
-    public partial class OverloadExpr : Expr
+    public abstract partial class OverloadExpr : Expr
     {
         public partial class FindResult
         {
@@ -1565,6 +1800,9 @@ namespace CppSharp.AST
 
         public bool RequiresADL { get; set; }
         public bool IsOverloaded { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitUnresolvedLookupExpr(this);
     }
 
     public partial class DependentScopeDeclRefExpr : Expr
@@ -1580,6 +1818,9 @@ namespace CppSharp.AST
         public bool HasTemplateKeyword { get; set; }
         public bool HasExplicitTemplateArgs { get; set; }
         public uint NumTemplateArgs { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitDependentScopeDeclRefExpr(this);
     }
 
     public partial class ExprWithCleanups : FullExpr
@@ -1590,6 +1831,9 @@ namespace CppSharp.AST
 
         public uint NumObjects { get; set; }
         public bool CleanupsHaveSideEffects { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitExprWithCleanups(this);
     }
 
     public partial class CXXUnresolvedConstructExpr : Expr
@@ -1604,6 +1848,9 @@ namespace CppSharp.AST
         public QualifiedType TypeAsWritten { get; set; }
         public bool IsListInitialization { get; set; }
         public uint ArgSize { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXUnresolvedConstructExpr(this);
     }
 
     public partial class CXXDependentScopeMemberExpr : Expr
@@ -1625,6 +1872,9 @@ namespace CppSharp.AST
         public bool HasTemplateKeyword { get; set; }
         public bool HasExplicitTemplateArgs { get; set; }
         public uint NumTemplateArgs { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXDependentScopeMemberExpr(this);
     }
 
     public partial class UnresolvedMemberExpr : OverloadExpr
@@ -1640,6 +1890,9 @@ namespace CppSharp.AST
         public bool IsArrow { get; set; }
         public SourceLocation OperatorLoc { get; set; }
         public SourceLocation MemberLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitUnresolvedMemberExpr(this);
     }
 
     public partial class CXXNoexceptExpr : Expr
@@ -1650,6 +1903,9 @@ namespace CppSharp.AST
 
         public Expr Operand { get; set; }
         public bool Value { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXNoexceptExpr(this);
     }
 
     public partial class PackExpansionExpr : Expr
@@ -1660,6 +1916,9 @@ namespace CppSharp.AST
 
         public Expr Pattern { get; set; }
         public SourceLocation EllipsisLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitPackExpansionExpr(this);
     }
 
     public partial class SizeOfPackExpr : Expr
@@ -1674,6 +1933,9 @@ namespace CppSharp.AST
         public Declaration Pack { get; set; }
         public uint PackLength { get; set; }
         public bool IsPartiallySubstituted { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitSizeOfPackExpr(this);
     }
 
     public partial class SubstNonTypeTemplateParmExpr : Expr
@@ -1684,6 +1946,9 @@ namespace CppSharp.AST
 
         public SourceLocation NameLoc { get; set; }
         public Expr Replacement { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitSubstNonTypeTemplateParmExpr(this);
     }
 
     public partial class SubstNonTypeTemplateParmPackExpr : Expr
@@ -1694,6 +1959,9 @@ namespace CppSharp.AST
 
         public SourceLocation ParameterPackLocation { get; set; }
         public TemplateArgument ArgumentPack { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitSubstNonTypeTemplateParmPackExpr(this);
     }
 
     public partial class FunctionParmPackExpr : Expr
@@ -1704,6 +1972,9 @@ namespace CppSharp.AST
 
         public SourceLocation ParameterPackLocation { get; set; }
         public uint NumExpansions { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitFunctionParmPackExpr(this);
     }
 
     public partial class MaterializeTemporaryExpr : Expr
@@ -1724,6 +1995,9 @@ namespace CppSharp.AST
         public Expr TemporaryExpr { get; set; }
         public uint ManglingNumber { get; set; }
         public bool IsBoundToLvalueReference { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitMaterializeTemporaryExpr(this);
     }
 
     public partial class CXXFoldExpr : Expr
@@ -1740,9 +2014,12 @@ namespace CppSharp.AST
         public Expr Init { get; set; }
         public SourceLocation EllipsisLoc { get; set; }
         public BinaryOperatorKind Operator { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCXXFoldExpr(this);
     }
 
-    public partial class CoroutineSuspendExpr : Expr
+    public abstract partial class CoroutineSuspendExpr : Expr
     {
         internal enum SubExpr
         {
@@ -1773,6 +2050,9 @@ namespace CppSharp.AST
 
         public bool IsImplicit { get; set; }
         public Expr Operand { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCoawaitExpr(this);
     }
 
     public partial class DependentCoawaitExpr : Expr
@@ -1784,6 +2064,9 @@ namespace CppSharp.AST
         public Expr Operand { get; set; }
         public UnresolvedLookupExpr OperatorCoawaitLookup { get; set; }
         public SourceLocation KeywordLoc { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitDependentCoawaitExpr(this);
     }
 
     public partial class CoyieldExpr : CoroutineSuspendExpr
@@ -1793,5 +2076,8 @@ namespace CppSharp.AST
         }
 
         public Expr Operand { get; set; }
+
+        public override T Visit<T>(IStmtVisitor<T> visitor) =>
+            visitor.VisitCoyieldExpr(this);
     }
 }

@@ -1,6 +1,4 @@
-﻿#pragma once
-
-#include "CSharp.h"
+﻿#include "CSharp.h"
 
 Foo::Foo(const QString& name)
 {
@@ -10,6 +8,10 @@ Foo::Foo(const char* name) : publicFieldMappedToEnum(TestFlag::Flag2)
 {
     A = 10;
     P = 50;
+    if (name)
+    {
+        _name = name;
+    }
 }
 
 Foo::Foo(int a, int p) : publicFieldMappedToEnum(TestFlag::Flag2)
@@ -23,6 +25,15 @@ Foo::Foo(char16_t ch)
 }
 
 Foo::Foo(wchar_t ch)
+{
+}
+
+Foo::Foo(const Foo& other) : A(other.A), P(other.P),
+    templateInAnotherUnit(other.templateInAnotherUnit), _name(other._name)
+{
+}
+
+Foo::~Foo()
 {
 }
 
@@ -77,6 +88,11 @@ const int& Foo::returnConstRef()
     return rename;
 }
 
+AbstractTemplate<int>* Foo::getAbstractTemplate()
+{
+    return new ImplementAbstractTemplate();
+}
+
 const int Foo::rename;
 
 int Foo::makeFunctionCall()
@@ -94,6 +110,10 @@ int Foo::getGetPropertyCall()
     return 1;
 }
 
+SmallPOD Foo::getSmallPod_cdecl() { return { 10000, 40000 }; }
+SmallPOD Foo::getSmallPod_stdcall() { return { 10000, 40000 }; }
+SmallPOD Foo::getSmallPod_thiscall() { return { 10000, 40000 }; }
+
 int Foo::operator ++()
 {
     return 5;
@@ -104,11 +124,15 @@ int Foo::operator --()
     return 4;
 }
 
+Foo::operator const char*() const
+{
+    return _name.data();
+}
+
 const Foo& Bar::operator[](int i) const
 {
     return m_foo;
 }
-
 
 Quux::Quux() : _setterWithDefaultOverload(0)
 {
@@ -117,7 +141,7 @@ Quux::Quux() : _setterWithDefaultOverload(0)
 
 Quux::Quux(int i) : Quux()
 {
-
+    priv = i;
 }
 
 Quux::Quux(char c) : Quux()
@@ -137,6 +161,11 @@ Quux::~Quux()
         delete _setterWithDefaultOverload;
         _setterWithDefaultOverload = 0;
     }
+}
+
+int Quux::getPriv() const
+{
+    return priv;
 }
 
 Foo* Quux::setterWithDefaultOverload()
@@ -202,11 +231,25 @@ void Qux::makeClassDynamic()
 {
 }
 
+int Qux::takeReferenceToPointer(Foo*& ret)
+{
+    return ret->A;
+}
+
+int Qux::type() const
+{
+    return 0;
+}
+
 Bar::Bar(Qux qux)
 {
 }
 
 Bar::Bar(Items item)
+{
+}
+
+Bar::~Bar()
 {
 }
 
@@ -254,11 +297,26 @@ void Bar::setIndex(int value)
     index = value;
 }
 
+int Bar::type() const
+{
+    return 1;
+}
+
 ForceCreationOfInterface::ForceCreationOfInterface()
 {
 }
 
+ForceCreationOfInterface::~ForceCreationOfInterface()
+{
+}
+
+Baz::Baz() : P(5) {}
+
 Baz::Baz(Bar::Items item)
+{
+}
+
+Baz::~Baz()
 {
 }
 
@@ -272,7 +330,16 @@ Qux Baz::returnQux()
     return Qux();
 }
 
-void Baz::setMethod(int value)
+void Baz::setMethod(ProtectedNestedEnum value)
+{
+}
+
+int Baz::type() const
+{
+    return -1;
+}
+
+AbstractProprietor::~AbstractProprietor()
 {
 }
 
@@ -303,6 +370,8 @@ AbstractProprietor::AbstractProprietor()
 AbstractProprietor::AbstractProprietor(int i)
 {
 }
+
+Proprietor::Proprietor() : _items(Bar::Items::Item1), _itemsByValue(Bar::Items::Item1) {}
 
 Proprietor::Proprietor(int i) : AbstractProprietor(i)
 {
@@ -435,6 +504,9 @@ void TestDestructors::InitMarker()
 {
     Marker = 0;
 }
+
+TestDestructors::TestDestructors() { Marker = 0xf00d; }
+TestDestructors::~TestDestructors() { Marker = 0xcafe; }
 
 int TestDestructors::Marker = 0;
 
@@ -576,7 +648,7 @@ void MethodsWithDefaultValues::defaultValueType(QGenericArgument valueType)
 {
 }
 
-void MethodsWithDefaultValues::defaultChar(char c)
+void MethodsWithDefaultValues::defaultChar(char c, char uc, char Uc, char Lc)
 {
 }
 
@@ -645,8 +717,9 @@ void MethodsWithDefaultValues::defaultZeroMappedToEnumAssignedWithCtor(DefaultZe
 {
 }
 
-void MethodsWithDefaultValues::defaultImplicitCtorInt(Quux arg)
+Quux MethodsWithDefaultValues::defaultImplicitCtorInt(Quux arg)
 {
+    return arg;
 }
 
 void MethodsWithDefaultValues::defaultImplicitCtorChar(Quux arg)
@@ -741,6 +814,10 @@ void MethodsWithDefaultValues::defaultWithStdNumericLimits(double d, int i)
 {
 }
 
+void MethodsWithDefaultValues::defaultWithParamRequiringRename(_ClassWithLeadingUnderscore* ptr)
+{
+}
+
 int MethodsWithDefaultValues::DefaultWithParamNamedSameAsMethod(int DefaultWithParamNamedSameAsMethod, const Foo& defaultArg)
 {
     return 1;
@@ -749,6 +826,10 @@ int MethodsWithDefaultValues::DefaultWithParamNamedSameAsMethod(int DefaultWithP
 int MethodsWithDefaultValues::getA()
 {
     return m_foo.A;
+}
+
+HasPureVirtualWithDefaultArg::~HasPureVirtualWithDefaultArg()
+{
 }
 
 HasOverridesWithChangedAccessBase::HasOverridesWithChangedAccessBase()
@@ -799,6 +880,28 @@ void HasOverridesWithIncreasedAccess::differentIncreasedAccessOverride()
 {
 }
 
+AbstractWithProperty::~AbstractWithProperty()
+{
+}
+
+HasOverriddenInManaged::HasOverriddenInManaged()
+{
+}
+
+HasOverriddenInManaged::~HasOverriddenInManaged()
+{
+}
+
+void HasOverriddenInManaged::setOverriddenInManaged(Baz* value)
+{
+    overriddenInManaged = value;
+}
+
+int HasOverriddenInManaged::callOverriddenInManaged()
+{
+    return overriddenInManaged->type();
+}
+
 IgnoredType PropertyWithIgnoredType::ignoredType()
 {
     return _ignoredType;
@@ -808,6 +911,20 @@ void PropertyWithIgnoredType::setIgnoredType(const IgnoredType& value)
 {
     _ignoredType = value;
 }
+
+MI_A0::MI_A0() : F(50) {}
+int MI_A0::get() { return F; };
+
+MI_A::MI_A() {}
+void MI_A::v(int i) {}
+
+MI_B::MI_B() {}
+
+MI_C::MI_C() {}
+
+MI_A1::MI_A1() {}
+
+MI_D::MI_D() {}
 
 StructWithPrivateFields::StructWithPrivateFields(int simplePrivateField, Foo complexPrivateField)
 {
@@ -823,6 +940,14 @@ int StructWithPrivateFields::getSimplePrivateField()
 Foo StructWithPrivateFields::getComplexPrivateField()
 {
     return complexPrivateField;
+}
+
+void TestPointers::TestDoubleCharPointers(const char** names)
+{
+}
+
+void TestPointers::TestTripleCharPointers(const char*** names)
+{
 }
 
 HasVirtualDtor1::HasVirtualDtor1()
@@ -898,6 +1023,10 @@ TestOverrideFromSecondaryBase::TestOverrideFromSecondaryBase()
 {
 }
 
+TestOverrideFromSecondaryBase::~TestOverrideFromSecondaryBase()
+{
+}
+
 void TestOverrideFromSecondaryBase::VirtualMember()
 {
 }
@@ -964,7 +1093,15 @@ InheritanceBuffer::InheritanceBuffer()
 {
 }
 
+InheritanceBuffer::~InheritanceBuffer()
+{
+}
+
 InheritsProtectedVirtualFromSecondaryBase::InheritsProtectedVirtualFromSecondaryBase()
+{
+}
+
+InheritsProtectedVirtualFromSecondaryBase::~InheritsProtectedVirtualFromSecondaryBase()
 {
 }
 
@@ -1052,16 +1189,15 @@ int OverrideFromIndirectSecondaryBase::property()
     return 1;
 }
 
+TestOutTypeInterfaces::TestOutTypeInterfaces()
+{
+}
+
 void TestOutTypeInterfaces::funcTryInterfaceTypePtrOut(CS_OUT TestParamToInterfacePassBaseTwo* classTry)
 {
 }
 
 void TestOutTypeInterfaces::funcTryInterfaceTypeOut(CS_OUT TestParamToInterfacePassBaseTwo classTry)
-{
-}
-
-template <typename T>
-TemplateWithDependentField<T>::TemplateWithDependentField()
 {
 }
 
@@ -1087,6 +1223,10 @@ OverridePropertyFromIndirectPrimaryBaseBase::OverridePropertyFromIndirectPrimary
 {
 }
 
+OverridePropertyFromIndirectPrimaryBaseBase::~OverridePropertyFromIndirectPrimaryBaseBase()
+{
+}
+
 OverridePropertyFromDirectPrimaryBase::OverridePropertyFromDirectPrimaryBase()
 {
 }
@@ -1105,6 +1245,10 @@ int OverridePropertyFromIndirectPrimaryBase::property()
 }
 
 AbstractOverrideFromSecondaryBase::AbstractOverrideFromSecondaryBase()
+{
+}
+
+AbstractOverrideFromSecondaryBase::~AbstractOverrideFromSecondaryBase()
 {
 }
 
@@ -1180,6 +1324,10 @@ InheritsFromHasSamePropertyInDerivedAbstractType::InheritsFromHasSamePropertyInD
 {
 }
 
+InheritsFromHasSamePropertyInDerivedAbstractType::~InheritsFromHasSamePropertyInDerivedAbstractType()
+{
+}
+
 MultipleInheritanceFieldOffsetsSecondaryBase::MultipleInheritanceFieldOffsetsSecondaryBase() : secondary(2)
 {
 }
@@ -1205,6 +1353,56 @@ bool VirtualDtorAddedInDerived::dtorCalled = false;
 
 void NamespaceB::B::Function(CS_OUT NamespaceA::A &a)
 {
+}
+
+HasPrivateVirtualProperty::~HasPrivateVirtualProperty()
+{
+}
+
+int HasPrivateVirtualProperty::property()
+{
+    return 0;
+}
+
+void HasPrivateVirtualProperty::protectedMethod()
+{
+}
+
+int HasPrivateOverriddenProperty::property()
+{
+    return 0;
+}
+
+void HasPrivateOverriddenProperty::protectedAbstractMethod()
+{
+}
+
+void HasPrivateOverriddenProperty::protectedMethod()
+{
+}
+
+int HasPrivateOverriddenProperty::protectedProperty()
+{
+    return 5;
+}
+
+int HasConflictWithProperty::conflictWithProperty()
+{
+    return 0;
+}
+
+int HasConflictWithProperty::getConflictWithProperty()
+{
+    return 0;
+}
+
+HasConflictWithAbstractProperty::~HasConflictWithAbstractProperty()
+{
+}
+
+int HasConflictWithAbstractProperty::conflictWithProperty()
+{
+    return 0;
 }
 
 HasVirtualTakesReturnsProblematicTypes::HasVirtualTakesReturnsProblematicTypes()
@@ -1238,9 +1436,25 @@ bool HasVirtualTakesReturnsProblematicTypes::callsVirtualToReturnBool(bool b)
 extern const unsigned char variableWithFixedPrimitiveArray[2] = { 5, 10 };
 extern const unsigned int variableWithVariablePrimitiveArray[] = { 15, 20 };
 
+const bool StaticVariables::Boolean = true;
+const char StaticVariables::Chr = 'G';
+const unsigned char StaticVariables::UChr = (unsigned char)'G';
+const int StaticVariables::Int = 1020304050;
+const float StaticVariables::Float = 0.5020f;
+const std::string StaticVariables::String = "Str";
+const char StaticVariables::ChrArray[2] { 'A', 'B' };
+const int StaticVariables::IntArray[2] { 1020304050, 1526374850 };
+const float StaticVariables::FloatArray[2] { 0.5020f, 0.6020f };
+const bool StaticVariables::BoolArray[2] { false, true };
+const void* StaticVariables::VoidPtrArray[2] { (void*)0x10203040, (void*)0x40302010 };
+
 TestString::TestString() : unicodeConst(L"ქართული ენა"), unicode(0)
 {
 }
+
+void decltypeFunctionPointer() {}
+
+void usesDecltypeFunctionPointer(funcPtr func) {}
 
 TestString::~TestString()
 {
@@ -1420,6 +1634,29 @@ DLL_API int useDuplicateDeclaredStruct(DuplicateDeclaredStruct* s)
     return s->i;
 }
 
+ComplexArrayElement::ComplexArrayElement() : BoolField(false), IntField(0), FloatField(0)
+{
+}
+
+HasComplexArray::HasComplexArray()
+{
+}
+
+TestIndexedProperties::TestIndexedProperties() : field(0)
+{
+}
+
+int TestIndexedProperties::operator[](const int& key)
+{
+    return key;
+}
+
+void* TestIndexedProperties::operator[](size_t n) const
+{
+    field = n;
+    return &field;
+}
+
 void useStdStringJustAsParameter(std::string s)
 {
 }
@@ -1543,6 +1780,14 @@ void InterfaceTester::setInterface(SimpleInterface* i)
     interface = i;
 }
 
+HasFunctionPtrField::HasFunctionPtrField()
+{
+}
+
+HasFunctionPtrField::~HasFunctionPtrField()
+{
+}
+
 void va_listFunction(va_list v)
 {
 }
@@ -1551,3 +1796,95 @@ char* returnCharPointer()
 {
     return 0;
 }
+
+char* takeCharPointer(char* c)
+{
+    return c;
+}
+
+char* takeConstCharRef(const char& c)
+{
+    return const_cast<char*>(&c);
+}
+
+const char*& takeConstCharStarRef(const char*& c)
+{
+    return c;
+}
+
+const void*& rValueReferenceToPointer(void*&& v)
+{
+    return (const void*&) v;
+}
+
+const Foo*& takeReturnReferenceToPointer(const Foo*& foo)
+{
+    return foo;
+}
+
+boolean_t takeTypemapTypedefParam(boolean_t b)
+{
+    return b;
+}
+
+const char* TestCSharpString(const char* in, const char** out)
+{
+    static std::string ret;
+    ret = in;
+    *out = ret.data();
+    return ret.data();
+}
+
+const wchar_t* TestCSharpStringWide(const wchar_t* in, const wchar_t** out)
+{
+    static std::wstring ret;
+    ret = in;
+    *out = ret.data();
+    return ret.data();
+}
+
+const char16_t* TestCSharpString16(const char16_t* in, const char16_t** out)
+{
+    static std::u16string ret;
+    ret = in;
+    *out = ret.data();
+    return ret.data();
+}
+
+const char32_t* TestCSharpString32(const char32_t* in, const char32_t** out)
+{
+    static std::u32string ret;
+    ret = in;
+    *out = ret.data();
+    return ret.data();
+}
+
+ConversionFunctions::ConversionFunctions() = default;
+ConversionFunctions::operator short* () { return &field; }
+ConversionFunctions::operator short& () { return field; }
+ConversionFunctions::operator short() { return field; }
+ConversionFunctions::operator const short*() const { return &field; }
+ConversionFunctions::operator const short&() const { return field; }
+ConversionFunctions::operator const short() const { return field; }
+
+const unsigned ClassCustomTypeAlignmentOffsets[5]
+{
+    offsetof(ClassCustomTypeAlignment, boolean),
+    offsetof(ClassCustomTypeAlignment, align16),
+    offsetof(ClassCustomTypeAlignment, align1),
+    offsetof(ClassCustomTypeAlignment, dbl),
+    offsetof(ClassCustomTypeAlignment, align8),
+};
+
+const unsigned ClassCustomObjectAlignmentOffsets[2] { 
+    offsetof(ClassCustomObjectAlignment, boolean),
+    offsetof(ClassCustomObjectAlignment, charAligned8),
+};
+
+const unsigned ClassMicrosoftObjectAlignmentOffsets[4]
+{
+    offsetof(ClassMicrosoftObjectAlignment, u8),
+    offsetof(ClassMicrosoftObjectAlignment, dbl),
+    offsetof(ClassMicrosoftObjectAlignment, i16),
+    offsetof(ClassMicrosoftObjectAlignment, boolean),
+};

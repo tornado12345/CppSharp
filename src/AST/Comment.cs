@@ -480,8 +480,9 @@ namespace CppSharp.AST
         {
             RenderNormal,
             RenderBold,
-            RenderMonospaced, 
-            RenderEmphasized
+            RenderMonospaced,
+            RenderEmphasized,
+            RenderAnchor
         }
 
         public uint CommandId { get; set; }
@@ -538,6 +539,7 @@ namespace CppSharp.AST
         A,
         Abstract,
         Addtogroup,
+        Anchor,
         Arg,
         Attention,
         Author,
@@ -623,6 +625,7 @@ namespace CppSharp.AST
         Result,
         Return,
         Returns,
+        Retval,
         Rtfonly,
         Endrtfonly,
         Sa,

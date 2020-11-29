@@ -1,4 +1,4 @@
-local buildconfig = path.join(builddir, "BuildConfig.cs")
+local buildconfig = path.join(actionbuilddir, "BuildConfig.cs")
 
 local function GenerateBuildConfig()
   print("Generating CppSharp build configuration file 'BuildConfig.cs'")
@@ -23,25 +23,15 @@ project "CppSharp.Parser"
   language "C#"
   clr "Unsafe"
 
-  files { "**.cs" }
-  removefiles { "BuildConfig.cs" }
-
   if generate_build_config == true then
     files { buildconfig }
-  else
-    files { "BuildConfig.cs" }
+    removecompilefiles { "BuildConfig.cs" }
   end
-
-  vpaths { ["*"] = "*" }
 
   links
   {
     "CppSharp",
     "CppSharp.AST",
-    "CppSharp.Runtime"
+    "CppSharp.Runtime",
+    CppSharpParserBindings
   }
-
-  SetupParser()
-
-  filter { "action:not netcore"}
-    links { "System", "System.Core" }

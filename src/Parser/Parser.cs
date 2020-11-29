@@ -8,37 +8,22 @@ using NativeLibrary = CppSharp.Parser.AST.NativeLibrary;
 
 namespace CppSharp
 {
-    public class ClangParser
+    public static class ClangParser
     {
-        /// <summary>
-        /// Context with translation units ASTs.
-        /// </summary>
-        public ASTContext ASTContext { get; private set; }
-
         /// <summary>
         /// Fired when source files are parsed.
         /// </summary>
-        public Action<IEnumerable<string>, ParserResult> SourcesParsed = delegate {};
+        public static Action<IEnumerable<string>, ParserResult> SourcesParsed = delegate {};
 
         /// <summary>
         /// Fired when library files are parsed.
         /// </summary>
-        public Action<string, ParserResult> LibraryParsed = delegate {};
-
-        public ClangParser()
-        {
-            ASTContext = new ASTContext();
-        }
-
-        public ClangParser(ASTContext context)
-        {
-            ASTContext = context;
-        }
+        public static Action<string, ParserResult> LibraryParsed = delegate {};
 
         /// <summary>
         /// Parses a C++ source file as a translation unit.
         /// </summary>
-        public ParserResult ParseSourceFile(string file, ParserOptions options)
+        public static ParserResult ParseSourceFile(string file, ParserOptions options)
         {
             return ParseSourceFiles(new [] { file }, options);
         }
@@ -46,9 +31,9 @@ namespace CppSharp
         /// <summary>
         /// Parses a set of C++ source files as a single translation unit.
         /// </summary>
-        public ParserResult ParseSourceFiles(IEnumerable<string> files, ParserOptions options)
+        public static ParserResult ParseSourceFiles(IEnumerable<string> files, ParserOptions options)
         {
-            options.ASTContext = ASTContext;
+            options.ASTContext = new ASTContext();
 
             foreach (var file in files)
                 options.AddSourceFiles(file);
@@ -62,12 +47,11 @@ namespace CppSharp
         /// <summary>
         /// Parses a library file with symbols.
         /// </summary>
-        public ParserResult ParseLibrary(string file, ParserOptions options)
+        public static ParserResult ParseLibrary(LinkerOptions options)
         {
-            options.LibraryFile = file;
-
             var result = Parser.ClangParser.ParseLibrary(options);
-            LibraryParsed(file, result);
+            for (uint i = 0; i < options.LibrariesCount; i++)
+                LibraryParsed(options.GetLibraries(i), result);
 
             return result;
         }

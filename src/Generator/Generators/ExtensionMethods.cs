@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using CppSharp.AST;
 using CppSharp.AST.Extensions;
+using CppSharp.Types;
 using Interop = System.Runtime.InteropServices;
 
 namespace CppSharp.Generators
@@ -43,8 +44,33 @@ namespace CppSharp.Generators
                 PrimitiveType.ULongLong,
                 PrimitiveType.UShort
             };
-            return type.IsPointerToPrimitiveType() &&
-                allowedToHaveDefaultPtrVals.Any(type.IsPointerToPrimitiveType);
+            return (type.IsPointerToPrimitiveType() &&
+                allowedToHaveDefaultPtrVals.Any(type.IsPointerToPrimitiveType)) ||
+                (type.IsAddress() && type.GetPointee().IsEnum());
+        }
+
+        public static Type GetMappedType(this Type type, TypeMapDatabase typeMaps,
+            GeneratorKind generatorKind)
+        {
+            TypeMap typeMap;
+            if (typeMaps.FindTypeMap(type, out typeMap))
+            {
+                var typePrinterContext = new TypePrinterContext
+                {
+                    Kind = TypePrinterContextKind.Managed,
+                    Type = typeMap.Type
+                };
+
+                switch (generatorKind)
+                {
+                    case GeneratorKind.CLI:
+                        return typeMap.CLISignatureType(typePrinterContext).Desugar();
+                    case GeneratorKind.CSharp:
+                        return typeMap.CSharpSignatureType(typePrinterContext).Desugar();
+                }
+            }
+
+            return type.Desugar();
         }
     }
 }

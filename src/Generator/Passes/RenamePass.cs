@@ -28,16 +28,12 @@ namespace CppSharp.Passes
 
         public RenameTargets Targets = RenameTargets.Any;
 
-        protected RenamePass()
-        {
-            VisitOptions.VisitFunctionParameters = false;
-            VisitOptions.VisitFunctionReturnType = false;
-            VisitOptions.VisitTemplateArguments = false;
+        protected RenamePass() => VisitOptions.ClearFlags(
+            VisitFlags.FunctionParameters | VisitFlags.FunctionReturnType |
+            VisitFlags.TemplateArguments |
             // these need to be visited but in a different order (see VisitClassDecl) so disable the default order
-            VisitOptions.VisitClassProperties = false;
-            VisitOptions.VisitClassMethods = false;
-            VisitOptions.VisitNamespaceEvents = false;
-        }
+            VisitFlags.ClassProperties | VisitFlags.ClassMethods |
+            VisitFlags.NamespaceEvents);
 
         protected RenamePass(RenameTargets targets)
             : this()
@@ -47,12 +43,10 @@ namespace CppSharp.Passes
 
         public virtual bool Rename(Declaration decl, out string newName)
         {
-            var method = decl as Method;
-            if (method != null && !method.IsStatic)
+            if (decl is Method method && !method.IsStatic)
             {
                 Method rootBaseMethod;
-                var @class = method.OriginalNamespace as Class;
-                if (@class != null && @class.IsInterface)
+                if (method.OriginalNamespace is Class @class && @class.IsInterface)
                     rootBaseMethod = (Method) method.OriginalFunction;
                 else
                     rootBaseMethod = method.GetRootBaseMethod();
@@ -63,10 +57,9 @@ namespace CppSharp.Passes
                 }
             }
 
-            var property = decl as Property;
-            if (property != null && !property.IsStatic)
+            if (decl is Property property && !property.IsStatic)
             {
-                var rootBaseProperty = ((Class) property.Namespace).GetBaseProperty(property);
+                var rootBaseProperty = ((Class) property.Namespace).GetBasePropertyByName(property);
                 if (rootBaseProperty != null && rootBaseProperty != property)
                 {
                     newName = rootBaseProperty.Name;
@@ -156,7 +149,7 @@ namespace CppSharp.Passes
             string newName;
             if (!Rename(decl, out newName) || AreThereConflicts(decl, newName))
                 return false;
-            
+
             decl.Name = newName;
             return true;
         }
@@ -190,20 +183,41 @@ namespace CppSharp.Passes
                 declarations.RemoveAll(d => specialization.TemplatedDecl.TemplatedDecl == d);
 
             var @class = decl.Namespace as Class;
-            if (@class != null && @class.IsDependent)
-                declarations.AddRange(@class.TemplateParameters);
+            if (@class != null)
+            {
+                declarations.AddRange(from typedefDecl in @class.Typedefs
+                                      where typedefDecl.Type.Desugar() is FunctionType
+                                      select typedefDecl);
+                if (@class.IsDependent)
+                    declarations.AddRange(@class.TemplateParameters);
+            }
 
-            var result = declarations.Any(d => d != decl && d.Name == newName);
-            if (result)
-                return true;
+            var existing = declarations.Find(d => d != decl && d.Name == newName);
+            if (existing != null)
+                return CheckExisting(decl, existing);
 
             if (decl is Method && decl.IsGenerated)
                 return @class.GetPropertyByName(newName) != null;
 
             var property = decl as Property;
-            if (property != null && property.Field != null)
-                return ((Class) decl.Namespace).Properties.FirstOrDefault(
-                    p => p != decl && p.Name == newName) != null;
+            if (property != null)
+            {
+                Property existingProperty = @class.Properties.Find(
+                    p => p != decl && p.Name == newName);
+                if (existingProperty != null)
+                {
+                    if (property.Access <= existingProperty.Access &&
+                        (property.Field != null || existingProperty.Field == null))
+                        return true;
+
+                    existingProperty.Name = property.Name;
+                }
+            }
+
+            var enumItem = decl as Enumeration.Item;
+            if (enumItem != null)
+                return ((Enumeration) enumItem.Namespace).Items.Any(
+                    i => i != decl && i.Name == newName);
 
             return false;
         }
@@ -218,6 +232,19 @@ namespace CppSharp.Passes
             }
             return function.Namespace.Functions.Where(
                 f => !f.Ignore && f.Parameters.SequenceEqual(function.Parameters, new ParameterComparer()));
+        }
+
+        private static bool CheckExisting(Declaration decl, Declaration existing)
+        {
+            var method = decl as Method;
+            var property = decl as Property;
+            if (method?.IsOverride != true && property?.IsOverride != true)
+                return true;
+
+            existing.Name = existing.Name == existing.OriginalName ||
+                string.IsNullOrEmpty(existing.OriginalName) ?
+                existing.Name + "_" : existing.OriginalName;
+            return false;
         }
 
         public override bool VisitClassDecl(Class @class)
@@ -236,6 +263,19 @@ namespace CppSharp.Passes
 
             foreach (var @event in @class.Events)
                 VisitEvent(@event);
+
+            foreach (var @enum in @class.Enums)
+                VisitEnumDecl(@enum);
+
+            return true;
+        }
+
+        public override bool VisitEnumDecl(Enumeration @enum)
+        {
+            VisitDeclaration(@enum);
+
+            foreach (var item in @enum.Items)
+                VisitEnumItemDecl(item);
 
             return true;
         }
@@ -357,7 +397,7 @@ namespace CppSharp.Passes
 
             var sb = new StringBuilder(decl.Name);
             // check if it's been renamed to avoid a keyword
-            if (sb[0] == '@')
+            if (sb[0] == '@' || sb[0] == '$')
                 sb.Remove(0, 1);
 
             RemoveUnderscores(sb);
@@ -414,6 +454,13 @@ namespace CppSharp.Passes
         {
             builder.AddPass(new RegexRenamePass("^" + prefix, string.Empty,
                 targets));
+        }
+
+        public static void RemovePrefix(string prefix, Declaration decl,
+            RenameTargets targets = RenameTargets.Any)
+        {
+            var pass = new RegexRenamePass("^" + prefix, string.Empty, targets);
+            decl.Visit(pass);
         }
 
         public static void RenameDeclsCase(this PassBuilder<TranslationUnitPass> builder, 
